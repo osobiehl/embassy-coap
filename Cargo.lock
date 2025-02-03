@@ -432,6 +432,8 @@ dependencies = [
  "embassy-sync",
  "embassy-time",
  "embassy-usb",
+ "embassy-usb-driver",
+ "embassy-usb-synopsys-otg",
  "embedded-alloc",
  "embedded-graphics",
  "embedded-hal 0.2.7",

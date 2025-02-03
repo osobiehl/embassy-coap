@@ -13,19 +13,27 @@ use core::net::Ipv4Addr;
 use core::ops::Deref;
 use core::pin::Pin;
 use core::ptr::addr_of_mut;
+use core::task::Context;
 use defmt::{panic, *};
 use defmt_rtt as _; // global logger
 use embassy_executor::Spawner;
 use embassy_futures::join::join;
+use embassy_net::driver::{
+    Capabilities, Driver as NetDriver, HardwareAddress, LinkState, RxToken, TxToken,
+};
 use embassy_net::tcp::TcpSocket;
 use embassy_net::udp::{PacketMetadata, UdpSocket};
-use embassy_net::{IpEndpoint, IpListenEndpoint, Ipv4Cidr, StackResources};
+use embassy_net::{EthernetAddress, IpEndpoint, IpListenEndpoint, Ipv4Cidr, StackResources};
 use embassy_stm32::usb::{Driver, Instance};
 use embassy_stm32::{bind_interrupts, peripherals, rng, usb, Config};
 use embassy_usb::class::cdc_ncm::embassy_net::{Device, Runner, State as NetState};
 use embassy_usb::class::cdc_ncm::{CdcNcmClass, State};
 use embassy_usb::{Builder, Config as UsbConfig, UsbDevice};
-use embedded_io_async::Write;
+use smoltcp::wire::EthernetProtocol;
+use smoltcp::wire::{EthernetFrame, Ipv4Packet};
+
+use smoltcp::wire::{ArpOperation, ArpPacket, ArpRepr};
+
 use heapless::Vec;
 use panic_probe as _;
 use rand_core::RngCore;
@@ -59,7 +67,9 @@ async fn usb_ncm_task(class: Runner<'static, MyDriver, MTU>) -> ! {
 }
 
 #[embassy_executor::task]
-async fn net_task(mut runner: embassy_net::Runner<'static, Device<'static, MTU>>) -> ! {
+async fn net_task(
+    mut runner: embassy_net::Runner<'static, WrapperDriver<Device<'static, MTU>>>,
+) -> ! {
     runner.run().await
 }
 
@@ -125,12 +135,15 @@ async fn coap_task(
                 continue;
             }
         };
-        let response = socket.send_to(&msg_bytes, metadata.endpoint).await;
+        let _ = socket
+            .send_to(&msg_bytes, metadata.endpoint)
+            .await
+            .inspect_err(|e| warn!("send response failed: {}", e));
     }
 }
 
 extern crate alloc;
-use alloc::format;
+use alloc::{format, vec};
 
 pub fn not_implemented(request: &CoapRequest<IpEndpoint>, response: &mut CoapResponse) {
     response.set_status(coap_lite::ResponseType::NotImplemented);
@@ -215,6 +228,171 @@ impl CoapStateManager {
     }
 }
 
+struct WrapperDriver<D: NetDriver> {
+    inner: D,
+    expected_mac: EthernetAddress,
+    magic_mac: EthernetAddress,
+    subnet: Ipv4Cidr,
+    ip_address: Ipv4Addr,
+}
+
+impl<D: NetDriver> WrapperDriver<D> {
+    pub fn new(
+        inner: D,
+        expected_mac: EthernetAddress,
+        magic_mac: EthernetAddress,
+        subnet: Ipv4Cidr,
+        ip_address: Ipv4Addr,
+    ) -> Self {
+        Self {
+            inner,
+            expected_mac,
+            magic_mac,
+            subnet,
+            ip_address,
+        }
+    }
+}
+
+struct VecToken {
+    data: alloc::vec::Vec<u8>,
+}
+
+impl RxToken for VecToken {
+    fn consume<R, F>(mut self, f: F) -> R
+    where
+        F: FnOnce(&mut [u8]) -> R,
+    {
+        f(&mut self.data)
+    }
+}
+
+impl<D: NetDriver> NetDriver for WrapperDriver<D> {
+    type TxToken<'a>
+        = D::TxToken<'a>
+    where
+        Self: 'a;
+    type RxToken<'a>
+        = VecToken
+    where
+        Self: 'a;
+
+    fn receive(&mut self, cx: &mut Context) -> Option<(Self::RxToken<'_>, Self::TxToken<'_>)> {
+        while let Some(packet) = self.inner.receive(cx) {
+            let vec_token = packet.0.consume(|bytes| VecToken {
+                data: bytes.to_vec(),
+            });
+            info!("receive bytes: {:?}", vec_token.data.len());
+            // Parse the packet as an Ethernet frame
+            if let Ok(frame) = EthernetFrame::new_checked(vec_token.data.as_slice()) {
+                info!("ethernet frame: {:?}", frame);
+
+                let dest_mac = frame.dst_addr();
+                info!("protocol: {:?}", frame.ethertype());
+                match frame.ethertype() {
+                    EthernetProtocol::Arp => {
+                        let arp_packet = ArpPacket::new_checked(frame.payload())
+                            .inspect_err(|e| warn!("could not create arp packet: {:?}", e))
+                            .ok()?;
+                        let arp_repr = ArpRepr::parse(&arp_packet).ok()?;
+
+                        // Check if it's an ARP request
+                        if arp_packet.operation() != ArpOperation::Request {
+                            return Some((vec_token, packet.1));
+                        }
+
+                        info!("arp message: {:?}", &arp_repr);
+
+                        if let ArpRepr::EthernetIpv4 {
+                            operation: _,
+                            source_hardware_addr,
+                            source_protocol_addr,
+                            target_hardware_addr,
+                            target_protocol_addr,
+                        } = arp_repr
+                        {
+                            if source_protocol_addr == Ipv4Addr::new(0, 0, 0, 0)
+                                || source_protocol_addr == target_protocol_addr
+                                || target_protocol_addr == Ipv4Addr::new(10, 0, 0, 1)
+                                || !self.subnet.contains_addr(&target_protocol_addr)
+                                || self.ip_address == target_protocol_addr
+                            {
+                                // do not mess with address discovery
+                                return Some((vec_token, packet.1));
+                            }
+                            // Create an ARP response
+                            let response = ArpRepr::EthernetIpv4 {
+                                operation: ArpOperation::Reply,
+                                source_hardware_addr: self.magic_mac, // Use the "magic" MAC address
+                                source_protocol_addr: target_protocol_addr, // Respond with the requested IP
+                                target_hardware_addr: source_hardware_addr, // Send to the requester's MAC
+                                target_protocol_addr: source_protocol_addr, // Send to the requester's IP
+                            };
+                            info!("creating response: {:?}", &response);
+
+                            packet.1.consume(response.buffer_len(), |response_bytes| {
+                                let mut p = ArpPacket::new_unchecked(response_bytes);
+                                response.emit(&mut p);
+                                let f =
+                                    EthernetFrame::new_checked(&p).expect("frame is not checked?!");
+                                info!("emitted response!");
+                            })
+                        }
+
+                        info!("made a funny");
+                        // we successfully intercepted the packet, and returned nothing
+                        continue;
+                    }
+                    _ => {}
+                }
+                if frame.ethertype() == EthernetProtocol::Ipv4 {
+                    let ipv4_packet = match Ipv4Packet::new_checked(frame.payload()) {
+                        Ok(p) => info!("ipv4 packet: {:?}", p),
+                        Err(e) => {
+                            info!("ipv4 packet parse failed: {:?}", e);
+                        }
+                    };
+                }
+                // Check if the destination MAC matches the expected one
+                if dest_mac != self.expected_mac {
+                    info!("Unexpected MAC address: {}", dest_mac);
+                }
+            }
+
+            // Return the packet for further processing
+            return Some((vec_token, packet.1));
+        }
+        None
+    }
+
+    fn transmit(&mut self, cx: &mut Context) -> Option<Self::TxToken<'_>> {
+        self.inner.transmit(cx)
+    }
+
+    /// Get the link state.
+    ///
+    /// This function must return the current link state of the device, and wake `cx.waker()` when
+    /// the link state changes.
+    fn link_state(&mut self, cx: &mut Context) -> LinkState {
+        self.inner.link_state(cx)
+    }
+
+    /// Get a description of device capabilities.
+    fn capabilities(&self) -> Capabilities {
+        self.inner.capabilities()
+    }
+
+    /// Get the device's hardware address.
+    ///
+    /// The returned hardware address also determines the "medium" of this driver. This indicates
+    /// what kind of packet the sent/received bytes are, and determines some behaviors of
+    /// the interface. For example, ARP/NDISC address resolution is only done for Ethernet mediums.
+    fn hardware_address(&self) -> HardwareAddress {
+        self.inner.hardware_address()
+    }
+    // Implement other required methods from the Driver trait
+    // ...
+}
 #[embassy_executor::main]
 async fn main(spawner: Spawner) {
     info!("Hello World!");
@@ -279,6 +457,8 @@ async fn main(spawner: Spawner) {
 
     // Our MAC addr.
     let our_mac_addr = [0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC];
+    // magic mac address
+    let magic_mac_addr = [0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCA];
     // Host's MAC addr. This is the MAC the host "thinks" its USB-to-ethernet adapter has.
     let host_mac_addr = [0x88, 0x88, 0x88, 0x88, 0x88, 0x88];
 
@@ -296,6 +476,13 @@ async fn main(spawner: Spawner) {
     let (runner, device) =
         class.into_embassy_net_device::<MTU, 4, 4>(NET_STATE.init(NetState::new()), our_mac_addr);
     unwrap!(spawner.spawn(usb_ncm_task(runner)));
+    let device_wrapper = WrapperDriver::new(
+        device,
+        EthernetAddress::from_bytes(&our_mac_addr),
+        EthernetAddress::from_bytes(&magic_mac_addr),
+        Ipv4Cidr::new(Ipv4Addr::new(10, 0, 0, 0), 24),
+        Ipv4Addr::new(10, 0, 0, 169),
+    );
 
     // let config = embassy_net::Config::dhcpv4(Default::default());
     let config = embassy_net::Config::ipv4_static(embassy_net::StaticConfigV4 {
@@ -311,8 +498,12 @@ async fn main(spawner: Spawner) {
 
     // Init network stack
     static RESOURCES: StaticCell<StackResources<3>> = StaticCell::new();
-    let (stack, runner) =
-        embassy_net::new(device, config, RESOURCES.init(StackResources::new()), seed);
+    let (stack, runner) = embassy_net::new(
+        device_wrapper,
+        config,
+        RESOURCES.init(StackResources::new()),
+        seed,
+    );
 
     unwrap!(spawner.spawn(net_task(runner)));
 

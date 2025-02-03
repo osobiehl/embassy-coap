@@ -1,0 +1,120 @@
+0.000000 INFO  Hello World!
+└─ embassy_stm32u5_examples::____embassy_main_task::{async_fn#0} @ src/main.rs:390 
+0.000000 INFO  initializing heap
+└─ embassy_stm32u5_examples::____embassy_main_task::{async_fn#0} @ src/main.rs:391 
+0.000000 INFO  heap initialized
+└─ embassy_stm32u5_examples::____embassy_main_task::{async_fn#0} @ src/main.rs:393 
+0.000488 INFO  USB: config_descriptor used: 94
+└─ embassy_usb::builder::{impl#1}::build @ /Users/osobiehl/.cargo/git/checkouts/embassy-9312dcb0ed774b29/1b44034/embassy-usb/src/builder.rs:221 
+0.000610 INFO  USB: bos_descriptor used: 12
+└─ embassy_usb::builder::{impl#1}::build @ /Users/osobiehl/.cargo/git/checkouts/embassy-9312dcb0ed774b29/1b44034/embassy-usb/src/builder.rs:222 
+0.000701 INFO  USB: msos_descriptor used: 0
+└─ embassy_usb::builder::{impl#1}::build @ /Users/osobiehl/.cargo/git/checkouts/embassy-9312dcb0ed774b29/1b44034/embassy-usb/src/builder.rs:223 
+0.000823 INFO  USB: control_buf size: 128
+└─ embassy_usb::builder::{impl#1}::build @ /Users/osobiehl/.cargo/git/checkouts/embassy-9312dcb0ed774b29/1b44034/embassy-usb/src/builder.rs:224 
+0.002777 INFO  IPv6: DOWN
+└─ embassy_net::{impl#5}::apply_static_config @ /Users/osobiehl/.cargo/git/checkouts/embassy-9312dcb0ed774b29/1b44034/embassy-net/src/lib.rs:759 
+0.156616 INFO  ncm: interface disabled
+└─ embassy_usb::class::cdc_ncm::{impl#2}::set_alternate_setting @ /Users/osobiehl/.cargo/git/checkouts/embassy-9312dcb0ed774b29/1b44034/embassy-usb/src/class/cdc_ncm/mod.rs:163 
+0.461761 INFO  ncm: interface enabled
+└─ embassy_usb::class::cdc_ncm::{impl#2}::set_alternate_setting @ /Users/osobiehl/.cargo/git/checkouts/embassy-9312dcb0ed774b29/1b44034/embassy-usb/src/class/cdc_ncm/mod.rs:162 
+0.462158 INFO  link_up = true
+└─ embassy_net::{impl#5}::poll @ /Users/osobiehl/.cargo/git/checkouts/embassy-9312dcb0ed774b29/1b44034/embassy-net/src/lib.rs:830 
+0.568786 INFO  receive bytes: 42
+└─ embassy_stm32u5_examples::{impl#3}::receive @ src/main.rs:275 
+0.569061 INFO  ethernet frame: Frame { buffer: [255, 255, 255, 255, 255, 255, 136, 136, 136, 136, 136, 136, 8, 6, 0, 1, 8, 0, 6, 4, 0, 1, 136, 136, 136, 136, 136, 136, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 10, 0, 0, 4] }
+└─ embassy_stm32u5_examples::{impl#3}::receive @ src/main.rs:278 
+0.569702 INFO  protocol: Arp
+└─ embassy_stm32u5_examples::{impl#3}::receive @ src/main.rs:281 
+0.569885 INFO  arp message: EthernetIpv4 { operation: Request, source_hardware_addr: 88-88-88-88-88-88, source_protocol_addr: 0.0.0.0, target_hardware_addr: 00-00-00-00-00-00, target_protocol_addr: 10.0.0.4 }
+└─ embassy_stm32u5_examples::{impl#3}::receive::{closure#1} @ src/main.rs:294 
+0.571563 INFO  receive bytes: 90
+└─ embassy_stm32u5_examples::{impl#3}::receive @ src/main.rs:275 
+0.571685 INFO  ethernet frame: Frame { buffer: [51, 51, 0, 0, 0, 22, 136, 136, 136, 136, 136, 136, 134, 221, 96, 0, 0, 0, 0, 36, 0, 1, 254, 128, 0, 0, 0, 0, 0, 0, 16, 247, 201, 240, 68, 47, 250, 65, 255, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 22, 58, 0, 1, 0, 5, 2, 0, 0, 143, 0, 93, 63, 0, 0, 0, 1, 4, 0, 0, 0, 255, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 255, 47, 250, 65] }
+└─ embassy_stm32u5_examples::{impl#3}::receive @ src/main.rs:278 
+0.572753 INFO  protocol: Ipv6
+└─ embassy_stm32u5_examples::{impl#3}::receive @ src/main.rs:281 
+0.572906 INFO  Unexpected MAC address: 33-33-00-00-00-16
+└─ embassy_stm32u5_examples::{impl#3}::receive::{closure#1} @ src/main.rs:350 
+0.573638 INFO  receive bytes: 86
+└─ embassy_stm32u5_examples::{impl#3}::receive @ src/main.rs:275 
+0.573760 INFO  ethernet frame: Frame { buffer: [51, 51, 255, 47, 250, 65, 136, 136, 136, 136, 136, 136, 134, 221, 96, 0, 0, 0, 0, 32, 58, 255, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 255, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 255, 47, 250, 65, 135, 0, 232, 237, 0, 0, 0, 0, 254, 128, 0, 0, 0, 0, 0, 0, 16, 247, 201, 240, 68, 47, 250, 65, 14, 1, 68, 194, 92, 187, 207, 232] }
+└─ embassy_stm32u5_examples::{impl#3}::receive @ src/main.rs:278 
+0.574829 INFO  protocol: Ipv6
+└─ embassy_stm32u5_examples::{impl#3}::receive @ src/main.rs:281 
+0.574951 INFO  Unexpected MAC address: 33-33-ff-2f-fa-41
+└─ embassy_stm32u5_examples::{impl#3}::receive::{closure#1} @ src/main.rs:350 
+0.575897 INFO  receive bytes: 42
+└─ embassy_stm32u5_examples::{impl#3}::receive @ src/main.rs:275 
+0.576049 INFO  ethernet frame: Frame { buffer: [255, 255, 255, 255, 255, 255, 136, 136, 136, 136, 136, 136, 8, 6, 0, 1, 8, 0, 6, 4, 0, 1, 136, 136, 136, 136, 136, 136, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 10, 0, 0, 4] }
+└─ embassy_stm32u5_examples::{impl#3}::receive @ src/main.rs:278 
+0.576690 INFO  protocol: Arp
+└─ embassy_stm32u5_examples::{impl#3}::receive @ src/main.rs:281 
+0.576873 INFO  arp message: EthernetIpv4 { operation: Request, source_hardware_addr: 88-88-88-88-88-88, source_protocol_addr: 0.0.0.0, target_hardware_addr: 00-00-00-00-00-00, target_protocol_addr: 10.0.0.4 }
+└─ embassy_stm32u5_examples::{impl#3}::receive::{closure#1} @ src/main.rs:294 
+0.581207 INFO  receive bytes: 42
+└─ embassy_stm32u5_examples::{impl#3}::receive @ src/main.rs:275 
+0.581359 INFO  ethernet frame: Frame { buffer: [255, 255, 255, 255, 255, 255, 136, 136, 136, 136, 136, 136, 8, 6, 0, 1, 8, 0, 6, 4, 0, 1, 136, 136, 136, 136, 136, 136, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 10, 0, 0, 4] }
+└─ embassy_stm32u5_examples::{impl#3}::receive @ src/main.rs:278 
+0.582000 INFO  protocol: Arp
+└─ embassy_stm32u5_examples::{impl#3}::receive @ src/main.rs:281 
+0.582183 INFO  arp message: EthernetIpv4 { operation: Request, source_hardware_addr: 88-88-88-88-88-88, source_protocol_addr: 0.0.0.0, target_hardware_addr: 00-00-00-00-00-00, target_protocol_addr: 10.0.0.4 }
+└─ embassy_stm32u5_examples::{impl#3}::receive::{closure#1} @ src/main.rs:294 
+0.636871 INFO  receive bytes: 518
+└─ embassy_stm32u5_examples::{impl#3}::receive @ src/main.rs:275 
+0.637023 INFO  ethernet frame: Frame { buffer: [51, 51, 0, 0, 0, 251, 136, 136, 136, 136, 136, 136, 134, 221, 96, 1, 13, 0, 1, 208, 17, 255, 254, 128, 0, 0, 0, 0, 0, 0, 16, 247, 201, 240, 68, 47, 250, 65, 255, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 251, 20, 233, 20, 233, 1, 208, 184, 211, 0, 0, 0, 0, 0, 23, 0, 0, 0, 0, 0, 1, 2, 108, 98, 7, 95, 100, 110, 115, 45, 115, 100, 4, 95, 117, 100, 112, 5, 108, 111, 99, 97, 108, 0, 0, 12, 128, 1, 8, 95, 97, 105, 114, 112, 111, 114, 116, 4, 95, 116, 99, 112, 192, 28, 0, 12, 128, 1, 7, 95, 114, 100, 108, 105, 110, 107, 192, 48, 0, 12, 128, 1, 11, 95, 97, 102, 112, 111, 118, 101, 114, 116, 99, 112, 192, 48, 0, 12, 128, 1, 4, 95, 115, 109, 98, 192, 48, 0, 12, 128, 1, 4, 95, 114, 102, 98, 192, 48, 0, 12, 128, 1, 6, 95, 97, 100, 105, 115, 107, 192, 48, 0, 12, 128, 1, 11, 95, 103, 111, 111, 103, 108, 101, 99, 97, 115, 116, 192, 48, 0, 12, 128, 1, 6, 95, 117, 115, 99, 97, 110, 192, 48, 0, 12, 128, 1, 4, 95, 112, 116, 112, 192, 48, 0, 12, 128, 1, 15, 95, 112, 100, 108, 45, 100, 97, 116, 97, 115, 116, 114, 101, 97, 109, 192, 48, 0, 12, 128, 1, 4, 95, 105, 112, 112, 192, 48, 0, 12, 128, 1, 8, 95, 115, 99, 97, 110, 110, 101, 114, 192, 48, 0, 12, 128, 1, 8, 95, 112, 114, 105, 110, 116, 101, 114, 192, 48, 0, 12, 128, 1, 7, 95, 105, 112, 112, 117, 115, 98, 192, 48, 0, 12, 128, 1, 5, 95, 105, 112, 112, 115, 192, 48, 0, 12, 128, 1, 7, 95, 117, 115, 99, 97, 110, 115, 192, 48, 0, 12, 128, 1, 29, 95, 114, 101, 109, 111, 116, 101, 112, 97, 105, 114, 105, 110, 103, 45, 109, 97, 110, 117, 97, 108, 45, 112, 97, 105, 114, 105, 110, 103, 192, 48, 0, 12, 128, 1, 14, 95, 114, 101, 109, 111, 116, 101, 112, 97, 105, 114, 105, 110, 103, 192, 48, 0, 12, 128, 1, 13, 95, 97, 112, 112, 108, 101, 45, 109, 111, 98, 100, 101, 118, 192, 48, 0, 12, 128, 1, 8, 56, 102, 102, 51, 48, 55, 101, 51, 4, 95, 115, 117, 98, 14, 95, 97, 112, 112, 108, 101, 45, 109, 111, 98, 100, 101, 118, 50, 192, 48, 0, 12, 128, 1, 15, 95, 97, 112, 112, 108, 101, 45, 112, 97, 105, 114, 97, 98, 108, 101, 192, 48, 0, 12, 128, 1, 15, 95, 99, 111, 109, 112, 97, 110, 105, 111, 110, 45, 108, 105, 110, 107, 192, 48, 0, 12, 128, 1, 0, 0, 41, 5, 160, 0, 0, 17, 148, 0, 18, 0, 4, 0, 14, 0, 6, 186, 100, 76, 119, 224, 157, 136, 136, 136, 136, 136, 136] }
+└─ embassy_stm32u5_examples::{impl#3}::receive @ src/main.rs:278 
+0.644073 INFO  protocol: Ipv6
+└─ embassy_stm32u5_examples::{impl#3}::receive @ src/main.rs:281 
+0.644195 INFO  Unexpected MAC address: 33-33-00-00-00-fb
+└─ embassy_stm32u5_examples::{impl#3}::receive::{closure#1} @ src/main.rs:350 
+0.645507 INFO  receive bytes: 230
+└─ embassy_stm32u5_examples::{impl#3}::receive @ src/main.rs:275 
+0.645629 INFO  ethernet frame: Frame { buffer: [51, 51, 0, 0, 0, 251, 136, 136, 136, 136, 136, 136, 134, 221, 96, 1, 13, 0, 0, 176, 17, 255, 254, 128, 0, 0, 0, 0, 0, 0, 16, 247, 201, 240, 68, 47, 250, 65, 255, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 251, 20, 233, 20, 233, 0, 176, 17, 130, 0, 0, 132, 0, 0, 0, 0, 1, 0, 0, 0, 2, 1, 49, 1, 52, 1, 65, 1, 70, 1, 70, 1, 50, 1, 52, 1, 52, 1, 48, 1, 70, 1, 57, 1, 67, 1, 55, 1, 70, 1, 48, 1, 49, 1, 48, 1, 48, 1, 48, 1, 48, 1, 48, 1, 48, 1, 48, 1, 48, 1, 48, 1, 48, 1, 48, 1, 48, 1, 48, 1, 56, 1, 69, 1, 70, 3, 105, 112, 54, 4, 97, 114, 112, 97, 0, 0, 12, 128, 1, 0, 0, 17, 148, 0, 25, 17, 74, 111, 115, 101, 115, 45, 77, 97, 99, 66, 111, 111, 107, 45, 80, 114, 111, 5, 108, 111, 99, 97, 108, 0, 192, 12, 0, 47, 128, 1, 0, 0, 17, 148, 0, 6, 192, 12, 0, 2, 0, 8, 0, 0, 41, 5, 160, 0, 0, 17, 148, 0, 18, 0, 4, 0, 14, 0, 6, 186, 100, 76, 119, 224, 157, 136, 136, 136, 136, 136, 136] }
+└─ embassy_stm32u5_examples::{impl#3}::receive @ src/main.rs:278 
+0.648651 INFO  protocol: Ipv6
+└─ embassy_stm32u5_examples::{impl#3}::receive @ src/main.rs:281 
+0.648773 INFO  Unexpected MAC address: 33-33-00-00-00-fb
+└─ embassy_stm32u5_examples::{impl#3}::receive::{closure#1} @ src/main.rs:350 
+0.906707 INFO  receive bytes: 42
+└─ embassy_stm32u5_examples::{impl#3}::receive @ src/main.rs:275 
+0.906860 INFO  ethernet frame: Frame { buffer: [255, 255, 255, 255, 255, 255, 136, 136, 136, 136, 136, 136, 8, 6, 0, 1, 8, 0, 6, 4, 0, 1, 136, 136, 136, 136, 136, 136, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 10, 0, 0, 4] }
+└─ embassy_stm32u5_examples::{impl#3}::receive @ src/main.rs:278 
+0.907501 INFO  protocol: Arp
+└─ embassy_stm32u5_examples::{impl#3}::receive @ src/main.rs:281 
+0.907684 INFO  arp message: EthernetIpv4 { operation: Request, source_hardware_addr: 88-88-88-88-88-88, source_protocol_addr: 0.0.0.0, target_hardware_addr: 00-00-00-00-00-00, target_protocol_addr: 10.0.0.4 }
+└─ embassy_stm32u5_examples::{impl#3}::receive::{closure#1} @ src/main.rs:294 
+1.136260 INFO  receive bytes: 350
+└─ embassy_stm32u5_examples::{impl#3}::receive @ src/main.rs:275 
+1.136383 INFO  ethernet frame: Frame { buffer: [51, 51, 0, 0, 0, 251, 136, 136, 136, 136, 136, 136, 134, 221, 96, 1, 13, 0, 1, 40, 17, 255, 254, 128, 0, 0, 0, 0, 0, 0, 16, 247, 201, 240, 68, 47, 250, 65, 255, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 251, 20, 233, 20, 233, 1, 40, 12, 9, 0, 0, 0, 0, 0, 4, 0, 0, 0, 4, 0, 1, 20, 74, 111, 115, 101, 226, 128, 153, 115, 32, 77, 97, 99, 66, 111, 111, 107, 32, 80, 114, 111, 8, 95, 97, 105, 114, 112, 108, 97, 121, 4, 95, 116, 99, 112, 5, 108, 111, 99, 97, 108, 0, 0, 255, 128, 1, 33, 53, 67, 69, 57, 49, 69, 56, 49, 49, 70, 65, 67, 64, 74, 111, 115, 101, 226, 128, 153, 115, 32, 77, 97, 99, 66, 111, 111, 107, 32, 80, 114, 111, 5, 95, 114, 97, 111, 112, 192, 42, 0, 255, 128, 1, 20, 74, 111, 115, 101, 226, 128, 153, 115, 32, 77, 97, 99, 66, 111, 111, 107, 32, 80, 114, 111, 15, 95, 99, 111, 109, 112, 97, 110, 105, 111, 110, 45, 108, 105, 110, 107, 192, 42, 0, 255, 128, 1, 17, 74, 111, 115, 101, 115, 45, 77, 97, 99, 66, 111, 111, 107, 45, 80, 114, 111, 192, 47, 0, 255, 128, 1, 192, 12, 0, 33, 0, 1, 0, 0, 17, 148, 0, 8, 0, 0, 0, 0, 27, 88, 192, 147, 192, 58, 0, 33, 0, 1, 0, 0, 17, 148, 0, 8, 0, 0, 0, 0, 27, 88, 192, 147, 192, 104, 0, 33, 0, 1, 0, 0, 17, 148, 0, 8, 0, 0, 0, 0, 208, 69, 192, 147, 192, 147, 0, 28, 0, 1, 0, 0, 17, 148, 0, 16, 254, 128, 0, 0, 0, 0, 0, 0, 16, 247, 201, 240, 68, 47, 250, 65, 0, 0, 41, 5, 160, 0, 0, 17, 148, 0, 18, 0, 4, 0, 14, 0, 6, 186, 100, 76, 119, 224, 157, 136, 136, 136, 136, 136, 136] }
+└─ embassy_stm32u5_examples::{impl#3}::receive @ src/main.rs:278 
+1.140899 INFO  protocol: Ipv6
+└─ embassy_stm32u5_examples::{impl#3}::receive @ src/main.rs:281 
+1.141021 INFO  Unexpected MAC address: 33-33-00-00-00-fb
+└─ embassy_stm32u5_examples::{impl#3}::receive::{closure#1} @ src/main.rs:350 
+1.232299 INFO  receive bytes: 42
+└─ embassy_stm32u5_examples::{impl#3}::receive @ src/main.rs:275 
+1.232421 INFO  ethernet frame: Frame { buffer: [255, 255, 255, 255, 255, 255, 136, 136, 136, 136, 136, 136, 8, 6, 0, 1, 8, 0, 6, 4, 0, 1, 136, 136, 136, 136, 136, 136, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 10, 0, 0, 4] }
+└─ embassy_stm32u5_examples::{impl#3}::receive @ src/main.rs:278 
+1.233093 INFO  protocol: Arp
+└─ embassy_stm32u5_examples::{impl#3}::receive @ src/main.rs:281 
+1.233245 INFO  arp message: EthernetIpv4 { operation: Request, source_hardware_addr: 88-88-88-88-88-88, source_protocol_addr: 0.0.0.0, target_hardware_addr: 00-00-00-00-00-00, target_protocol_addr: 10.0.0.4 }
+└─ embassy_stm32u5_examples::{impl#3}::receive::{closure#1} @ src/main.rs:294 
+1.388854 INFO  receive bytes: 350
+└─ embassy_stm32u5_examples::{impl#3}::receive @ src/main.rs:275 
+1.389007 INFO  ethernet frame: Frame { buffer: [51, 51, 0, 0, 0, 251, 136, 136, 136, 136, 136, 136, 134, 221, 96, 1, 13, 0, 1, 40, 17, 255, 254, 128, 0, 0, 0, 0, 0, 0, 16, 247, 201, 240, 68, 47, 250, 65, 255, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 251, 20, 233, 20, 233, 1, 40, 13, 10, 0, 0, 0, 0, 0, 4, 0, 0, 0, 4, 0, 1, 20, 74, 111, 115, 101, 226, 128, 153, 115, 32, 77, 97, 99, 66, 111, 111, 107, 32, 80, 114, 111, 8, 95, 97, 105, 114, 112, 108, 97, 121, 4, 95, 116, 99, 112, 5, 108, 111, 99, 97, 108, 0, 0, 255, 0, 1, 33, 53, 67, 69, 57, 49, 69, 56, 49, 49, 70, 65, 67, 64, 74, 111, 115, 101, 226, 128, 153, 115, 32, 77, 97, 99, 66, 111, 111, 107, 32, 80, 114, 111, 5, 95, 114, 97, 111, 112, 192, 42, 0, 255, 0, 1, 20, 74, 111, 115, 101, 226, 128, 153, 115, 32, 77, 97, 99, 66, 111, 111, 107, 32, 80, 114, 111, 15, 95, 99, 111, 109, 112, 97, 110, 105, 111, 110, 45, 108, 105, 110, 107, 192, 42, 0, 255, 0, 1, 17, 74, 111, 115, 101, 115, 45, 77, 97, 99, 66, 111, 111, 107, 45, 80, 114, 111, 192, 47, 0, 255, 0, 1, 192, 12, 0, 33, 0, 1, 0, 0, 17, 148, 0, 8, 0, 0, 0, 0, 27, 88, 192, 147, 192, 58, 0, 33, 0, 1, 0, 0, 17, 148, 0, 8, 0, 0, 0, 0, 27, 88, 192, 147, 192, 104, 0, 33, 0, 1, 0, 0, 17, 148, 0, 8, 0, 0, 0, 0, 208, 69, 192, 147, 192, 147, 0, 28, 0, 1, 0, 0, 17, 148, 0, 16, 254, 128, 0, 0, 0, 0, 0, 0, 16, 247, 201, 240, 68, 47, 250, 65, 0, 0, 41, 5, 160, 0, 0, 17, 148, 0, 18, 0, 4, 0, 14, 0, 6, 186, 100, 76, 119, 224, 157, 136, 136, 136, 136, 136, 136] }
+└─ embassy_stm32u5_examples::{impl#3}::receive @ src/main.rs:278 
+1.393493 INFO  protocol: Ipv6
+└─ embassy_stm32u5_examples::{impl#3}::receive @ src/main.rs:281 
+1.393615 INFO  Unexpected MAC address: 33-33-00-00-00-fb
+└─ embassy_stm32u5_examples::{impl#3}::receive::{closure#1} @ src/main.rs:350 
+1.556976 INFO  receive bytes: 42
+└─ embassy_stm32u5_examples::{impl#3}::receive @ src/main.rs:275 
+1.557128 INFO  ethernet frame: Frame { buffer: [255, 255, 255, 255, 255, 255, 136, 136, 136, 136, 136, 136, 8, 6, 0, 1, 8, 0, 6, 4, 0, 1, 136, 136, 136, 136, 136, 136, 10, 0, 0, 4, 0, 0, 0, 0, 0, 0, 10, 0, 0, 4] }
+└─ embassy_stm32u5_examples::{impl#3}::receive @ src/main.rs:278 
+1.557800 INFO  protocol: Arp
+└─ embassy_stm32u5_examples::{impl#3}::receive @ src/main.rs:281 
+1.557983 INFO  arp message: EthernetIpv4 { operation: Request, source_hardware_addr: 88-88-88-88-88-88, source_protocol_addr: 10.0.0.4, target_hardware_addr: 00-00-00-00-00-00, target_protocol_addr: 10.0.0.4 }
+└─ embassy_stm32u5_examples::{impl#3}::receive::{closure#1} @ src/main.rs:294 
+1.558959 INFO  made a funny
+└─ embassy_stm32u5_examples::{impl#3}::receive::{closure#1} @ src/main.rs:334 
