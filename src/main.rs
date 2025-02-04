@@ -15,22 +15,29 @@ use defmt::{panic, *};
 use defmt_rtt as _; // global logger
 use embassy_executor::Spawner;
 use embassy_futures::join::join;
+use embassy_futures::select::{self, select, Either};
 use embassy_net::driver::{
     Capabilities, Driver as NetDriver, HardwareAddress, LinkState, RxToken, TxToken,
 };
+use embassy_net::raw::RawSocket;
 use embassy_net::tcp::TcpSocket;
 use embassy_net::{EthernetAddress, IpEndpoint, IpListenEndpoint, Ipv4Cidr, StackResources};
+use embassy_stm32::mode::{Async, Mode};
+use embassy_stm32::usart::Config as UartConfig;
+use embassy_stm32::usart::{Uart, UartRx, UartTx};
 use embassy_stm32::usb::{Driver, Instance};
-use embassy_stm32::{bind_interrupts, peripherals, rng, usb, Config};
+use embassy_stm32::{bind_interrupts, peripherals, rng, usart, usb, Config};
+use embassy_sync::blocking_mutex::raw::NoopRawMutex;
 use embassy_usb::class::cdc_ncm::embassy_net::{Device, Runner, State as NetState};
 use embassy_usb::class::cdc_ncm::{CdcNcmClass, State};
 use embassy_usb::{Builder, Config as UsbConfig, UsbDevice};
+use serial_line_ip::{Decoder, Encoder};
+use smoltcp::socket::raw::PacketMetadata as RawPacketMetadata;
 use smoltcp::wire::EthernetProtocol;
 use smoltcp::wire::{EthernetFrame, Ipv4Packet};
 
 use smoltcp::wire::{ArpOperation, ArpPacket, ArpRepr};
 
-use heapless::Vec;
 use panic_probe as _;
 use rand_core::RngCore;
 use static_cell::StaticCell;
@@ -38,8 +45,19 @@ use static_cell::StaticCell;
 bind_interrupts!(struct Irqs {
     OTG_FS => usb::InterruptHandler<peripherals::USB_OTG_FS>;
     RNG => rng::InterruptHandler<peripherals::RNG>;
+    USART2 => usart::InterruptHandler<peripherals::USART2>;
 });
+
 use alloc::vec;
+use embassy_sync::channel::{self, Receiver, Sender};
+
+const MAX_MESSAGES_CHANNEL: usize = 15;
+
+use alloc::vec::Vec;
+type MessageChannel = channel::Channel<NoopRawMutex, Vec<u8>, MAX_MESSAGES_CHANNEL>;
+type ChannelSender = channel::Sender<'static, NoopRawMutex, Vec<u8>, MAX_MESSAGES_CHANNEL>;
+type ChannelReceiver = channel::Receiver<'static, NoopRawMutex, Vec<u8>, MAX_MESSAGES_CHANNEL>;
+
 use embedded_alloc::LlffHeap as Heap;
 mod coap;
 
@@ -71,12 +89,130 @@ async fn net_task(
     runner.run().await
 }
 
+#[embassy_executor::task]
+async fn ibus_traffic_to_ethernet_task(
+    stack: embassy_net::Stack<'static>,
+    receive_from_uart_to_send_via_ethernet: ChannelReceiver,
+    send_packets_from_raw_socket_to_uart: ChannelSender,
+) -> ! {
+    let mut rx_buffer = [0; 4096];
+    let mut rx_metadata_buffer = [RawPacketMetadata::EMPTY; 10];
+    let mut tx_buffer = [0; 4096];
+    let mut tx_metadata_buffer = [RawPacketMetadata::EMPTY; 10];
+
+    let raw_socket = RawSocket::new::<WrapperDriver<Device<'static, MTU>>>(
+        stack,
+        smoltcp::wire::IpVersion::Ipv4,
+        smoltcp::wire::IpProtocol::Udp,
+        &mut rx_metadata_buffer,
+        &mut rx_buffer,
+        &mut tx_metadata_buffer,
+        &mut tx_buffer,
+    );
+    let mut reception_buffer = [0; 2000];
+
+    loop {
+        let receive_to_send_to_ibus = receive_from_uart_to_send_via_ethernet.receive();
+        let receive_from_waw_socket = raw_socket.recv(&mut reception_buffer);
+        let future_selection = select(receive_to_send_to_ibus, receive_from_waw_socket).await;
+        match future_selection {
+            Either::First(packet_to_send_to_eth) => {
+                raw_socket.send(&packet_to_send_to_eth).await;
+            }
+            Either::Second(raw_packet) => {
+                let rx_packet = raw_packet.unwrap();
+                send_packets_from_raw_socket_to_uart
+                    .send(reception_buffer[..rx_packet].to_vec())
+                    .await;
+            }
+        }
+    }
+}
+
+#[embassy_executor::task]
+async fn uart_rx_task(mut rx_uart: UartRx<'static, Async>, send_to_raw_socket: ChannelSender) -> ! {
+    let mut rx_buffer = [0; 2000];
+    let mut slip_decode_buffer = [0; 4000];
+
+    let slip_decode_buffer_slice = &mut slip_decode_buffer;
+
+    let mut slip_decoder = serial_line_ip::Decoder::new();
+    let mut next_packet = vec![];
+    loop {
+        let uart_read_bytes = match rx_uart.read_until_idle(&mut rx_buffer).await {
+            Ok(b) => b,
+            Err(e) => {
+                warn!("uart reception failed: {:?}", e);
+                continue;
+            }
+        };
+        let mut read_slice = &rx_buffer[..uart_read_bytes];
+        while read_slice.len() != 0 {
+            match slip_decoder.decode(read_slice, slip_decode_buffer_slice) {
+                Ok((bytes_processed, output_slice, is_end_of_packet)) => {
+                    next_packet.extend_from_slice(output_slice);
+                    if is_end_of_packet {
+                        // mem::take clears the vector and leaves it empty
+                        send_to_raw_socket
+                            .send(core::mem::take(&mut next_packet))
+                            .await;
+                        read_slice = &read_slice[bytes_processed..];
+                        slip_decoder = Decoder::new();
+                    } else {
+                        warn!("split packet received: not very well tested");
+                    }
+                }
+                Err(e) => {
+                    // reset everything
+                    slip_decoder = Decoder::new();
+                    next_packet.clear();
+                    warn!("decoding failed: {:?}", Debug2Format(&e))
+                }
+            }
+        }
+    }
+}
+
+#[embassy_executor::task]
+async fn uart_tx_task(
+    mut tx_uart: UartTx<'static, Async>,
+    receive_from_raw_socket_to_uart: ChannelReceiver,
+) -> ! {
+    let mut encode_buffer = [0u8; 2000];
+    loop {
+        let mut encoder = Encoder::new();
+        let rx = receive_from_raw_socket_to_uart.receive().await;
+        let bytes_writen = match encoder.encode(&rx, &mut encode_buffer) {
+            Ok(t) => t.written,
+            Err(e) => {
+                warn!("slip decoding failed: {:?}", Debug2Format(&e));
+                continue;
+            }
+        };
+        match tx_uart.write(&encode_buffer[..bytes_writen]).await {
+            Ok(b) => info!("wrote {:?} bytes", b),
+            Err(e) => warn!("uart transmission failed: {:?}", e),
+        }
+    }
+}
+
+macro_rules! create_static_channel {
+    () => {{
+        static IBUS_CHANNEL: StaticCell<MessageChannel> = StaticCell::new();
+        let ibus_channel = IBUS_CHANNEL.init_with(MessageChannel::new);
+        let send_to_ibus_channel = ibus_channel.sender();
+        let receive_from_ibus_channel = ibus_channel.receiver();
+        (send_to_ibus_channel, receive_from_ibus_channel)
+    }};
+}
+
 struct WrapperDriver<D: NetDriver> {
     inner: D,
     expected_mac: EthernetAddress,
     magic_mac: EthernetAddress,
     subnet: Ipv4Cidr,
     ip_address: Ipv4Addr,
+    sender_to_redirect_task: ChannelSender,
 }
 
 impl<D: NetDriver> WrapperDriver<D> {
@@ -86,6 +222,7 @@ impl<D: NetDriver> WrapperDriver<D> {
         magic_mac: EthernetAddress,
         subnet: Ipv4Cidr,
         ip_address: Ipv4Addr,
+        sender_to_redirect_task: ChannelSender,
     ) -> Self {
         Self {
             inner,
@@ -93,6 +230,7 @@ impl<D: NetDriver> WrapperDriver<D> {
             magic_mac,
             subnet,
             ip_address,
+            sender_to_redirect_task,
         }
     }
 
@@ -277,6 +415,7 @@ impl<D: NetDriver> NetDriver for WrapperDriver<D> {
     // Implement other required methods from the Driver trait
     // ...
 }
+
 #[embassy_executor::main]
 async fn main(spawner: Spawner) {
     info!("Hello World!");
@@ -304,7 +443,22 @@ async fn main(spawner: Spawner) {
         config.rcc.mux.iclksel = mux::Iclksel::HSI48; // USB uses ICLK
     }
 
-    let p = embassy_stm32::init(config);
+    let peripherals_instance = embassy_stm32::init(config);
+    let mut config = UartConfig::default();
+    config.baudrate = 1_000_000;
+
+    let uart = Uart::new(
+        peripherals_instance.USART2,
+        peripherals_instance.PD6,
+        peripherals_instance.PD5,
+        Irqs,
+        peripherals_instance.GPDMA1_CH4,
+        peripherals_instance.GPDMA1_CH5,
+        config,
+    )
+    .expect("could not initialize UART");
+
+    let (uart_sender_component, uart_receiver_component) = uart.split();
 
     // Create the driver, from the HAL.
 
@@ -317,7 +471,14 @@ async fn main(spawner: Spawner) {
     // to enable vbus_detection to comply with the USB spec. If you enable it, the board
     // has to support it or USB won't work at all. See docs on `vbus_detection` for details.
     config.vbus_detection = false;
-    let driver = Driver::new_fs(p.USB_OTG_FS, Irqs, p.PA12, p.PA11, ep_out_buffer, config);
+    let driver = Driver::new_fs(
+        peripherals_instance.USB_OTG_FS,
+        Irqs,
+        peripherals_instance.PA12,
+        peripherals_instance.PA11,
+        ep_out_buffer,
+        config,
+    );
 
     let mut config = UsbConfig::new(0xc0de, 0xcafe);
     config.manufacturer = Some("Embassy");
@@ -346,6 +507,9 @@ async fn main(spawner: Spawner) {
     // Host's MAC addr. This is the MAC the host "thinks" its USB-to-ethernet adapter has.
     let host_mac_addr = [0x88, 0x88, 0x88, 0x88, 0x88, 0x88];
 
+    let (send_to_uart_task, receive_from_ibus_channel) = create_static_channel!();
+    let (send_to_raw_socket, receive_from_uart_task_channel) = create_static_channel!();
+
     // Create classes on the builder.
     static STATE: StaticCell<State> = StaticCell::new();
     let class = CdcNcmClass::new(&mut builder, STATE.init(State::new()), host_mac_addr, 64);
@@ -366,16 +530,17 @@ async fn main(spawner: Spawner) {
         EthernetAddress::from_bytes(&our_mac_addr),
         Ipv4Cidr::new(Ipv4Addr::new(10, 0, 0, 0), 24),
         Ipv4Addr::new(10, 0, 0, 169),
+        send_to_uart_task,
     );
 
     // let config = embassy_net::Config::dhcpv4(Default::default());
     let config = embassy_net::Config::ipv4_static(embassy_net::StaticConfigV4 {
         address: Ipv4Cidr::new(Ipv4Addr::new(10, 0, 0, 169), 24),
-        dns_servers: Vec::new(),
+        dns_servers: heapless::Vec::new(),
         gateway: Some(Ipv4Addr::new(10, 0, 0, 1)),
     });
 
-    let mut rng = embassy_stm32::rng::Rng::new(p.RNG, Irqs);
+    let mut rng = embassy_stm32::rng::Rng::new(peripherals_instance.RNG, Irqs);
 
     // Generate random seed
     let seed = rng.next_u64();
@@ -394,5 +559,18 @@ async fn main(spawner: Spawner) {
     let resource = InfoResource {};
     let mut manager = CoapStateManager::new();
     manager.add_resource(resource);
-    unwrap!(spawner.spawn(coap_task(stack, manager)))
+    unwrap!(spawner.spawn(coap_task(stack, manager)));
+
+    unwrap!(spawner.spawn(uart_tx_task(
+        uart_sender_component,
+        receive_from_ibus_channel
+    )));
+
+    unwrap!(spawner.spawn(uart_rx_task(uart_receiver_component, send_to_raw_socket)));
+
+    unwrap!(spawner.spawn(ibus_traffic_to_ethernet_task(
+        stack,
+        receive_from_uart_task_channel,
+        send_to_uart_task
+    )))
 }
