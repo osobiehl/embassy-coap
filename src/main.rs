@@ -252,6 +252,104 @@ impl<D: NetDriver> WrapperDriver<D> {
             ip_address,
         }
     }
+
+    pub fn do_read_poll<'a>(&'a mut self, cx: &mut Context) -> DriverResult<'a, D> {
+        let packet = self.inner.receive(cx);
+        match packet {
+            Some(packet) => {
+                let vec_token = packet.0.consume(|bytes| VecToken {
+                    data: bytes.to_vec(),
+                });
+                // Parse the packet as an Ethernet frame
+                if let Ok(frame) = EthernetFrame::new_checked(vec_token.data.as_slice()) {
+                    let dest_mac = frame.dst_addr();
+                    match frame.ethertype() {
+                        EthernetProtocol::Arp => {
+                            let arp_packet = ArpPacket::new_checked(frame.payload())
+                                .inspect_err(|e| warn!("could not create arp packet: {:?}", e))
+                                .expect("parsing failed");
+                            let arp_repr = ArpRepr::parse(&arp_packet).expect("parsing failed");
+
+                            // Check if it's an ARP request
+                            if arp_packet.operation() != ArpOperation::Request {
+                                return DriverResult::Token(Some((vec_token, packet.1)));
+                            }
+
+                            if let ArpRepr::EthernetIpv4 {
+                                operation: _,
+                                source_hardware_addr,
+                                source_protocol_addr,
+                                target_hardware_addr,
+                                target_protocol_addr,
+                            } = arp_repr
+                            {
+                                if source_protocol_addr == Ipv4Addr::new(0, 0, 0, 0)
+                                    || source_protocol_addr == target_protocol_addr
+                                    || target_protocol_addr == Ipv4Addr::new(10, 0, 0, 1)
+                                    || !self.subnet.contains_addr(&target_protocol_addr)
+                                    || self.ip_address == target_protocol_addr
+                                {
+                                    // do not mess with address discovery
+                                    return DriverResult::Token(Some((vec_token, packet.1)));
+                                }
+                                // Create an ARP response
+                                let response = ArpRepr::EthernetIpv4 {
+                                    operation: ArpOperation::Reply,
+                                    source_hardware_addr: self.magic_mac, // Use the "magic" MAC address
+                                    source_protocol_addr: target_protocol_addr, // Respond with the requested IP
+                                    target_hardware_addr: source_hardware_addr, // Send to the requester's MAC
+                                    target_protocol_addr: source_protocol_addr, // Send to the requester's IP
+                                };
+                                info!("creating response: {:?}", &response);
+                                let response_len = response.buffer_len();
+                                let mut response_buffer_1 = vec![0; response_len];
+
+                                let mut p =
+                                    ArpPacket::new_unchecked(response_buffer_1.as_mut_slice());
+                                response.emit(&mut p);
+
+                                packet.1.consume(
+                                    EthernetFrame::<&[u8]>::buffer_len(response_buffer_1.len()),
+                                    |response_bytes| {
+                                        let mut reply_frame =
+                                            EthernetFrame::new_unchecked(response_bytes);
+                                        reply_frame.set_dst_addr(source_hardware_addr);
+                                        reply_frame.set_src_addr(self.magic_mac);
+                                        reply_frame.set_ethertype(EthernetProtocol::Arp);
+
+                                        reply_frame
+                                            .payload_mut()
+                                            .copy_from_slice(&response_buffer_1);
+                                    },
+                                )
+                            }
+
+                            info!("made a funny");
+                            // we successfully intercepted the packet, and returned nothing
+                            return DriverResult::Retry;
+                        }
+                        _ => {}
+                    }
+                    if frame.ethertype() == EthernetProtocol::Ipv4 {
+                        let ipv4_packet = match Ipv4Packet::new_checked(frame.payload()) {
+                            Ok(p) => info!("ipv4 packet: {:?}", p),
+                            Err(e) => {
+                                info!("ipv4 packet parse failed: {:?}", e);
+                            }
+                        };
+                    }
+                    // Check if the destination MAC matches the expected one
+                    if dest_mac != self.expected_mac {
+                        info!("Unexpected MAC address: {}", dest_mac);
+                    }
+                }
+
+                // Return the packet for further processing
+                return DriverResult::Token(Some((vec_token, packet.1)));
+            }
+            None => return DriverResult::Token(None),
+        }
+    }
 }
 
 struct VecToken {
@@ -267,6 +365,16 @@ impl RxToken for VecToken {
     }
 }
 
+enum DriverResult<'a, D: NetDriver + 'a> {
+    Retry,
+    Token(
+        Option<(
+            <WrapperDriver<D> as NetDriver>::RxToken<'a>,
+            <WrapperDriver<D> as NetDriver>::TxToken<'a>,
+        )>,
+    ),
+}
+
 impl<D: NetDriver> NetDriver for WrapperDriver<D> {
     type TxToken<'a>
         = D::TxToken<'a>
@@ -278,94 +386,27 @@ impl<D: NetDriver> NetDriver for WrapperDriver<D> {
         Self: 'a;
 
     fn receive(&mut self, cx: &mut Context) -> Option<(Self::RxToken<'_>, Self::TxToken<'_>)> {
-        while let Some(packet) = self.inner.receive(cx) {
-            let vec_token = packet.0.consume(|bytes| VecToken {
-                data: bytes.to_vec(),
-            });
-            info!("receive bytes: {:?}", vec_token.data.len());
-            // Parse the packet as an Ethernet frame
-            if let Ok(frame) = EthernetFrame::new_checked(vec_token.data.as_slice()) {
-                info!("ethernet frame: {:?}", frame);
+        let y = loop {
+            let x = unsafe {
+                // Get a raw mutable pointer to `self`
+                let self_ptr: *mut Self = self;
 
-                let dest_mac = frame.dst_addr();
-                info!("protocol: {:?}", frame.ethertype());
-                match frame.ethertype() {
-                    EthernetProtocol::Arp => {
-                        let arp_packet = ArpPacket::new_checked(frame.payload())
-                            .inspect_err(|e| warn!("could not create arp packet: {:?}", e))
-                            .ok()?;
-                        let arp_repr = ArpRepr::parse(&arp_packet).ok()?;
-
-                        // Check if it's an ARP request
-                        if arp_packet.operation() != ArpOperation::Request {
-                            return Some((vec_token, packet.1));
-                        }
-
-                        info!("arp message: {:?}", &arp_repr);
-
-                        if let ArpRepr::EthernetIpv4 {
-                            operation: _,
-                            source_hardware_addr,
-                            source_protocol_addr,
-                            target_hardware_addr,
-                            target_protocol_addr,
-                        } = arp_repr
-                        {
-                            if source_protocol_addr == Ipv4Addr::new(0, 0, 0, 0)
-                                || source_protocol_addr == target_protocol_addr
-                                || target_protocol_addr == Ipv4Addr::new(10, 0, 0, 1)
-                                || !self.subnet.contains_addr(&target_protocol_addr)
-                                || self.ip_address == target_protocol_addr
-                            {
-                                // do not mess with address discovery
-                                return Some((vec_token, packet.1));
-                            }
-                            // Create an ARP response
-                            let response = ArpRepr::EthernetIpv4 {
-                                operation: ArpOperation::Reply,
-                                source_hardware_addr: self.magic_mac, // Use the "magic" MAC address
-                                source_protocol_addr: target_protocol_addr, // Respond with the requested IP
-                                target_hardware_addr: source_hardware_addr, // Send to the requester's MAC
-                                target_protocol_addr: source_protocol_addr, // Send to the requester's IP
-                            };
-                            info!("creating response: {:?}", &response);
-
-                            packet.1.consume(response.buffer_len(), |response_bytes| {
-                                let mut p = ArpPacket::new_unchecked(response_bytes);
-                                response.emit(&mut p);
-                                let f =
-                                    EthernetFrame::new_checked(&p).expect("frame is not checked?!");
-                                info!("emitted response!");
-                            })
-                        }
-
-                        info!("made a funny");
-                        // we successfully intercepted the packet, and returned nothing
-                        continue;
-                    }
-                    _ => {}
+                // Dereference and call `do_read_poll`, bypassing Rust borrow checker
+                (*self_ptr).do_read_poll(cx)
+            };
+            match x {
+                DriverResult::Retry => {
+                    drop(x); // reference to x is dropped here
+                    continue;
                 }
-                if frame.ethertype() == EthernetProtocol::Ipv4 {
-                    let ipv4_packet = match Ipv4Packet::new_checked(frame.payload()) {
-                        Ok(p) => info!("ipv4 packet: {:?}", p),
-                        Err(e) => {
-                            info!("ipv4 packet parse failed: {:?}", e);
-                        }
-                    };
-                }
-                // Check if the destination MAC matches the expected one
-                if dest_mac != self.expected_mac {
-                    info!("Unexpected MAC address: {}", dest_mac);
-                }
+                DriverResult::Token(tok) => break tok,
             }
-
-            // Return the packet for further processing
-            return Some((vec_token, packet.1));
-        }
-        None
+        };
+        return y;
     }
 
     fn transmit(&mut self, cx: &mut Context) -> Option<Self::TxToken<'_>> {
+        let waker = cx.waker().clone();
         self.inner.transmit(cx)
     }
 
@@ -479,7 +520,7 @@ async fn main(spawner: Spawner) {
     let device_wrapper = WrapperDriver::new(
         device,
         EthernetAddress::from_bytes(&our_mac_addr),
-        EthernetAddress::from_bytes(&magic_mac_addr),
+        EthernetAddress::from_bytes(&our_mac_addr),
         Ipv4Cidr::new(Ipv4Addr::new(10, 0, 0, 0), 24),
         Ipv4Addr::new(10, 0, 0, 169),
     );
