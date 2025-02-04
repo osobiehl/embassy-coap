@@ -38,6 +38,7 @@ rand_core = "=0.6.3"
 embedded-io-async = "0.6.1"
 smoltcp = {version =  "0.12.0", default-features=false, features = ["socket-tcp", "socket-udp", "proto-ipv4", "proto-ipv6"] }
 async-trait = "0.1.86"
+futures-channel = {version = "0.3.31", default-features = false, features = ["alloc"]}
 
 [features]
 ## Use secure registers when TrustZone is enabled
