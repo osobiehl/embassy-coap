@@ -284,7 +284,7 @@ source = "git+https://github.com/embassy-rs/embassy?rev=1b44034#1b440342085a0a4f
 dependencies = [
  "defmt",
  "embassy-futures",
- "embassy-sync 0.6.2 (git+https://github.com/embassy-rs/embassy?rev=1b44034)",
+ "embassy-sync",
  "embassy-time",
  "embedded-hal 0.2.7",
  "embedded-hal 1.0.0",
@@ -341,7 +341,7 @@ dependencies = [
  "defmt",
  "document-features",
  "embassy-net-driver",
- "embassy-sync 0.6.2 (git+https://github.com/embassy-rs/embassy?rev=1b44034)",
+ "embassy-sync",
  "embassy-time",
  "embedded-io-async",
  "embedded-nal-async",
@@ -365,7 +365,7 @@ source = "git+https://github.com/embassy-rs/embassy?rev=1b44034#1b440342085a0a4f
 dependencies = [
  "embassy-futures",
  "embassy-net-driver",
- "embassy-sync 0.6.2 (git+https://github.com/embassy-rs/embassy?rev=1b44034)",
+ "embassy-sync",
 ]
 
 [[package]]
@@ -387,7 +387,7 @@ dependencies = [
  "embassy-futures",
  "embassy-hal-internal",
  "embassy-net-driver",
- "embassy-sync 0.6.2 (git+https://github.com/embassy-rs/embassy?rev=1b44034)",
+ "embassy-sync",
  "embassy-time",
  "embassy-time-driver",
  "embassy-time-queue-utils",
@@ -428,8 +428,9 @@ dependencies = [
  "embassy-executor",
  "embassy-futures",
  "embassy-net",
+ "embassy-net-driver-channel",
  "embassy-stm32",
- "embassy-sync 0.6.2 (registry+https://github.com/rust-lang/crates.io-index)",
+ "embassy-sync",
  "embassy-time",
  "embassy-usb",
  "embassy-usb-driver",
@@ -448,20 +449,6 @@ dependencies = [
  "tinybmp",
  "usb-device",
  "usbd-ethernet",
-]
-
-[[package]]
-name = "embassy-sync"
-version = "0.6.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8d2c8cdff05a7a51ba0087489ea44b0b1d97a296ca6b1d6d1a33ea7423d34049"
-dependencies = [
- "cfg-if",
- "critical-section",
- "embedded-io-async",
- "futures-sink",
- "futures-util",
- "heapless",
 ]
 
 [[package]]
@@ -519,7 +506,7 @@ dependencies = [
  "defmt",
  "embassy-futures",
  "embassy-net-driver-channel",
- "embassy-sync 0.6.2 (git+https://github.com/embassy-rs/embassy?rev=1b44034)",
+ "embassy-sync",
  "embassy-usb-driver",
  "heapless",
  "ssmarshal",
@@ -541,7 +528,7 @@ source = "git+https://github.com/embassy-rs/embassy?rev=1b44034#1b440342085a0a4f
 dependencies = [
  "critical-section",
  "defmt",
- "embassy-sync 0.6.2 (git+https://github.com/embassy-rs/embassy?rev=1b44034)",
+ "embassy-sync",
  "embassy-usb-driver",
 ]
 

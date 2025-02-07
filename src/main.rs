@@ -21,20 +21,28 @@ use embassy_net::driver::{
 };
 use embassy_net::raw::RawSocket;
 use embassy_net::tcp::TcpSocket;
-use embassy_net::{EthernetAddress, IpEndpoint, IpListenEndpoint, Ipv4Cidr, StackResources};
+use embassy_net::{
+    ConfigV4, EthernetAddress, IpEndpoint, IpListenEndpoint, Ipv4Cidr, StackResources,
+};
+use embassy_net_driver_channel::{
+    Runner as ChannelRunner, RxRunner, State as NetState, StateRunner, TxRunner,
+};
 use embassy_stm32::mode::{Async, Mode};
 use embassy_stm32::usart::Config as UartConfig;
 use embassy_stm32::usart::{Uart, UartRx, UartTx};
 use embassy_stm32::usb::{Driver, Instance};
 use embassy_stm32::{bind_interrupts, peripherals, rng, usart, usb, Config};
-use embassy_sync::blocking_mutex::raw::NoopRawMutex;
-use embassy_usb::class::cdc_ncm::embassy_net::{Device, Runner, State as NetState};
-use embassy_usb::class::cdc_ncm::{CdcNcmClass, State};
+use embassy_sync::blocking_mutex::raw::{CriticalSectionRawMutex, NoopRawMutex};
+use embassy_usb::class::cdc_ncm::embassy_net::{Device, Runner as UsbEmbassyNetRunner};
+use embassy_usb::class::cdc_ncm::{
+    CdcNcmClass, Receiver as UsbReceiver, Sender as UsbSender, State,
+};
 use embassy_usb::{Builder, Config as UsbConfig, UsbDevice};
 use serial_line_ip::{Decoder, Encoder};
+use smoltcp::phy::ChecksumCapabilities;
 use smoltcp::socket::raw::PacketMetadata as RawPacketMetadata;
-use smoltcp::wire::EthernetProtocol;
 use smoltcp::wire::{EthernetFrame, Ipv4Packet};
+use smoltcp::wire::{EthernetProtocol, Ipv4Repr};
 
 use smoltcp::wire::{ArpOperation, ArpPacket, ArpRepr};
 
@@ -64,6 +72,8 @@ mod coap;
 #[global_allocator]
 static HEAP: Heap = Heap::empty();
 
+type StmUsbDriver<'a> = embassy_stm32::usb::Driver<'a, peripherals::USB_OTG_FS>;
+
 const MTU: usize = 1514;
 
 use core::mem::MaybeUninit;
@@ -78,7 +88,7 @@ async fn usb_task(mut device: UsbDevice<'static, MyDriver>) -> ! {
 }
 
 #[embassy_executor::task]
-async fn usb_ncm_task(class: Runner<'static, MyDriver, MTU>) -> ! {
+async fn usb_ncm_task(class: UsbEmbassyNetRunner<'static, MyDriver, MTU>) -> ! {
     class.run().await
 }
 
@@ -90,10 +100,35 @@ async fn net_task(
 }
 
 #[embassy_executor::task]
+async fn ibus_ipv4_to_ethernet_task(
+    receive_packets_from_ibus_ipv4: ChannelReceiver,
+    send_packets_from_ibus_to_ethernet_task: ChannelSender,
+    destination_mac_address: EthernetAddress,
+    source_simulated_mac_address: EthernetAddress,
+) {
+    loop {
+        let receive_ipv4_packet = receive_packets_from_ibus_ipv4.receive().await;
+        let eth_frame_len = EthernetFrame::<&[u8]>::buffer_len(receive_ipv4_packet.len());
+        let mut eth_buf_vec = vec![0; eth_frame_len];
+        let mut eth_frame = EthernetFrame::new_unchecked(&mut eth_buf_vec);
+        eth_frame.set_dst_addr(destination_mac_address);
+        eth_frame.set_src_addr(source_simulated_mac_address);
+        eth_frame.set_ethertype(EthernetProtocol::Ipv4);
+        eth_frame
+            .payload_mut()
+            .copy_from_slice(&receive_ipv4_packet);
+        send_packets_from_ibus_to_ethernet_task
+            .send(eth_buf_vec)
+            .await;
+    }
+}
+
+#[embassy_executor::task]
 async fn ibus_traffic_to_ethernet_task(
     stack: embassy_net::Stack<'static>,
     receive_from_uart_to_send_via_ethernet: ChannelReceiver,
     send_packets_from_raw_socket_to_uart: ChannelSender,
+    router: Ipv4Router,
 ) -> ! {
     let mut rx_buffer = [0; 4096];
     let mut rx_metadata_buffer = [RawPacketMetadata::EMPTY; 10];
@@ -113,17 +148,27 @@ async fn ibus_traffic_to_ethernet_task(
 
     loop {
         let receive_to_send_to_ibus = receive_from_uart_to_send_via_ethernet.receive();
-        let receive_from_waw_socket = raw_socket.recv(&mut reception_buffer);
-        let future_selection = select(receive_to_send_to_ibus, receive_from_waw_socket).await;
+        let receive_from_raw_socket = raw_socket.recv(&mut reception_buffer);
+        let future_selection = select(receive_to_send_to_ibus, receive_from_raw_socket).await;
         match future_selection {
             Either::First(packet_to_send_to_eth) => {
+                info!("routing packet to send to ethernet interface");
                 raw_socket.send(&packet_to_send_to_eth).await;
             }
             Either::Second(raw_packet) => {
                 let rx_packet = raw_packet.unwrap();
-                send_packets_from_raw_socket_to_uart
-                    .send(reception_buffer[..rx_packet].to_vec())
-                    .await;
+                let packet = Ipv4Packet::new_checked(&reception_buffer[..rx_packet]).unwrap();
+
+                if router.is_ipv4_packet_valid_for_routing(packet.clone()) {
+                    let repr = Ipv4Repr::parse(&packet, &ChecksumCapabilities::default())
+                        .expect("ipv4 repr parse failed");
+                    info!("routing packet received on raw socket: ");
+                    info!("packet repr: {:?}", repr);
+
+                    send_packets_from_raw_socket_to_uart
+                        .send(reception_buffer[..rx_packet].to_vec())
+                        .await;
+                }
             }
         }
     }
@@ -146,12 +191,14 @@ async fn uart_rx_task(mut rx_uart: UartRx<'static, Async>, send_to_raw_socket: C
                 continue;
             }
         };
+        info!("read: {} bytes", uart_read_bytes);
         let mut read_slice = &rx_buffer[..uart_read_bytes];
         while read_slice.len() != 0 {
             match slip_decoder.decode(read_slice, slip_decode_buffer_slice) {
                 Ok((bytes_processed, output_slice, is_end_of_packet)) => {
                     next_packet.extend_from_slice(output_slice);
                     if is_end_of_packet {
+                        info!("sending decoded slip bytes to raw socket!");
                         // mem::take clears the vector and leaves it empty
                         send_to_raw_socket
                             .send(core::mem::take(&mut next_packet))
@@ -166,7 +213,8 @@ async fn uart_rx_task(mut rx_uart: UartRx<'static, Async>, send_to_raw_socket: C
                     // reset everything
                     slip_decoder = Decoder::new();
                     next_packet.clear();
-                    warn!("decoding failed: {:?}", Debug2Format(&e))
+                    warn!("decoding failed: {:?}", Debug2Format(&e));
+                    read_slice = &[];
                 }
             }
         }
@@ -190,8 +238,66 @@ async fn uart_tx_task(
             }
         };
         match tx_uart.write(&encode_buffer[..bytes_writen]).await {
-            Ok(b) => info!("wrote {:?} bytes", b),
+            Ok(_) => {}
             Err(e) => warn!("uart transmission failed: {:?}", e),
+        }
+    }
+}
+
+#[embassy_executor::task]
+async fn usb_reception_task_rx(
+    mut rx_usb: UsbReceiver<'static, StmUsbDriver<'static>>,
+    mut rx_chan: RxRunner<'static, MTU>,
+    state_chan: StateRunner<'static>,
+) -> ! {
+    loop {
+        trace!("WAITING for connection");
+        state_chan.set_link_state(LinkState::Down);
+
+        rx_usb.wait_connection().await.unwrap();
+
+        trace!("Connected");
+        state_chan.set_link_state(LinkState::Up);
+
+        loop {
+            let p = rx_chan.rx_buf().await;
+            match rx_usb.read_packet(p).await {
+                Ok(n) => rx_chan.rx_done(n),
+                Err(e) => {
+                    warn!("error reading packet: {:?}", e);
+                    break;
+                }
+            };
+        }
+    }
+}
+#[embassy_executor::task]
+async fn usb_sending_task_tx(
+    mut tx_usb: UsbSender<'static, StmUsbDriver<'static>>,
+    mut tx_chan: TxRunner<'static, MTU>,
+    receiver_for_ibus_packets: ChannelReceiver,
+) {
+    let mut holder_vec;
+    loop {
+        let rx_from_ibus_receiver = receiver_for_ibus_packets.receive();
+        let rx_from_stack = tx_chan.tx_buf();
+        let rx = select(rx_from_stack, rx_from_ibus_receiver).await;
+        let mut should_signal = false;
+        let recv_slice = match rx {
+            Either::First(s) => {
+                should_signal = true;
+                s
+            }
+            Either::Second(v) => {
+                holder_vec = v;
+                holder_vec.as_slice()
+            }
+        };
+        if let Err(e) = tx_usb.write_packet(recv_slice).await {
+            warn!("Failed to TX packet: {:?}", e);
+        }
+        if should_signal {
+            tx_chan.tx_done();
         }
     }
 }
@@ -208,11 +314,95 @@ macro_rules! create_static_channel {
 
 struct WrapperDriver<D: NetDriver> {
     inner: D,
-    expected_mac: EthernetAddress,
-    magic_mac: EthernetAddress,
-    subnet: Ipv4Cidr,
-    ip_address: Ipv4Addr,
-    sender_to_redirect_task: ChannelSender,
+    router: WrapperIbusRouter, //    expected_mac: EthernetAddress,
+                               //    magic_mac: EthernetAddress,
+                               //    subnet: Ipv4Cidr,
+                               //    ip_address: Ipv4Addr,
+                               //    sender_to_redirect_task: ChannelSender,
+}
+
+#[derive(Clone, Copy, Format)]
+pub struct Ipv4Router {
+    pub gateway_address: Ipv4Addr,
+    pub subnet: Ipv4Cidr,
+    pub device_address: Ipv4Addr, // Ipv4Addr::new(10, 0, 0, 1)
+}
+
+impl Ipv4Router {
+    fn is_ipv4_packet_valid_for_routing(&self, packet: Ipv4Packet<&[u8]>) -> bool {
+        let dest_addr = packet.dst_addr();
+        return self.subnet.contains_addr(&dest_addr)
+            && dest_addr != self.device_address
+            && dest_addr != self.gateway_address;
+    }
+}
+
+struct WrapperIbusRouter {
+    pub ipv4_router: Ipv4Router,
+    pub device_mac_address: EthernetAddress,
+    pub simulated_mac_address: EthernetAddress,
+    pub pc_address: Ipv4Addr,
+    pub sender_to_redirect_task: ChannelSender,
+}
+
+impl WrapperIbusRouter {
+    // returns the packet, and the intended receiver of the new packet
+    pub fn intercept_arp_repr(&self, repr: &ArpRepr) -> Option<(ArpRepr, EthernetAddress)> {
+        if let ArpRepr::EthernetIpv4 {
+            operation: _,
+            source_hardware_addr,
+            source_protocol_addr,
+            target_hardware_addr,
+            target_protocol_addr,
+        } = repr
+        {
+            if *source_protocol_addr == Ipv4Addr::new(0, 0, 0, 0)
+                || source_protocol_addr == target_protocol_addr
+                || *target_protocol_addr == self.ipv4_router.gateway_address
+                || !self.ipv4_router.subnet.contains_addr(&target_protocol_addr)
+                || self.ipv4_router.device_address == *target_protocol_addr
+                || self.pc_address == *target_protocol_addr
+            {
+                // do not mess with address discovery
+                return None;
+            }
+
+            let response = ArpRepr::EthernetIpv4 {
+                operation: ArpOperation::Reply,
+                source_hardware_addr: self.simulated_mac_address, // Use the "magic" MAC address
+                source_protocol_addr: *target_protocol_addr,      // Respond with the requested IP
+                target_hardware_addr: *source_hardware_addr,      // Send to the requester's MAC
+                target_protocol_addr: *source_protocol_addr,      // Send to the requester's IP
+            };
+            info!("creating response for: {:?}", repr);
+            return Some((response, *source_hardware_addr));
+        } else {
+            return None;
+        }
+    }
+
+    pub fn intercept_ipv4_packet(&self, packet: EthernetFrame<&[u8]>) {
+        match Ipv4Packet::new_checked(packet.payload()) {
+            Ok(valid_packet) => {
+                //info!("ipv4 packet: {:?}", valid_packet);
+                if self
+                    .ipv4_router
+                    .is_ipv4_packet_valid_for_routing(valid_packet.clone())
+                {
+                    let vec_packet = valid_packet.into_inner().to_vec();
+                    match self.sender_to_redirect_task.try_send(vec_packet) {
+                        Err(_) => {
+                            info!("failed to send packet to redirect task because it is full")
+                        }
+                        Ok(()) => info!("succesfully routed packet"),
+                    };
+                }
+            }
+            Err(e) => {
+                info!("ipv4 packet parse failed: {:?}", e);
+            }
+        };
+    }
 }
 
 impl<D: NetDriver> WrapperDriver<D> {
@@ -220,17 +410,20 @@ impl<D: NetDriver> WrapperDriver<D> {
         inner: D,
         expected_mac: EthernetAddress,
         magic_mac: EthernetAddress,
-        subnet: Ipv4Cidr,
-        ip_address: Ipv4Addr,
         sender_to_redirect_task: ChannelSender,
+        test_pc_address: Ipv4Addr,
+        router: &Ipv4Router,
     ) -> Self {
         Self {
             inner,
-            expected_mac,
-            magic_mac,
-            subnet,
-            ip_address,
-            sender_to_redirect_task,
+
+            router: WrapperIbusRouter {
+                device_mac_address: expected_mac,
+                simulated_mac_address: magic_mac,
+                ipv4_router: router.clone(),
+                sender_to_redirect_task,
+                pc_address: test_pc_address,
+            },
         }
     }
 
@@ -243,7 +436,6 @@ impl<D: NetDriver> WrapperDriver<D> {
                 });
                 // Parse the packet as an Ethernet frame
                 if let Ok(frame) = EthernetFrame::new_checked(vec_token.data.as_slice()) {
-                    let dest_mac = frame.dst_addr();
                     match frame.ethertype() {
                         EthernetProtocol::Arp => {
                             let arp_packet = ArpPacket::new_checked(frame.payload())
@@ -255,73 +447,43 @@ impl<D: NetDriver> WrapperDriver<D> {
                             if arp_packet.operation() != ArpOperation::Request {
                                 return DriverResult::Token(Some((vec_token, packet.1)));
                             }
+                            match self.router.intercept_arp_repr(&arp_repr) {
+                                Some((response, to)) => {
+                                    info!("doing response intercept");
+                                    let response_len = response.buffer_len();
+                                    let mut response_buffer_1 = vec![0; response_len];
 
-                            if let ArpRepr::EthernetIpv4 {
-                                operation: _,
-                                source_hardware_addr,
-                                source_protocol_addr,
-                                target_hardware_addr,
-                                target_protocol_addr,
-                            } = arp_repr
-                            {
-                                if source_protocol_addr == Ipv4Addr::new(0, 0, 0, 0)
-                                    || source_protocol_addr == target_protocol_addr
-                                    || target_protocol_addr == Ipv4Addr::new(10, 0, 0, 1)
-                                    || !self.subnet.contains_addr(&target_protocol_addr)
-                                    || self.ip_address == target_protocol_addr
-                                {
-                                    // do not mess with address discovery
-                                    return DriverResult::Token(Some((vec_token, packet.1)));
+                                    let mut p =
+                                        ArpPacket::new_unchecked(response_buffer_1.as_mut_slice());
+                                    response.emit(&mut p);
+
+                                    packet.1.consume(
+                                        EthernetFrame::<&[u8]>::buffer_len(response_buffer_1.len()),
+                                        |response_bytes| {
+                                            let mut reply_frame =
+                                                EthernetFrame::new_unchecked(response_bytes);
+                                            reply_frame.set_dst_addr(to);
+                                            reply_frame
+                                                .set_src_addr(self.router.simulated_mac_address);
+                                            reply_frame.set_ethertype(EthernetProtocol::Arp);
+
+                                            reply_frame
+                                                .payload_mut()
+                                                .copy_from_slice(&response_buffer_1);
+                                        },
+                                    );
+
+                                    info!("made a funny");
+                                    // we successfully intercepted the packet, and returned nothing
+                                    return DriverResult::Retry;
                                 }
-                                // Create an ARP response
-                                let response = ArpRepr::EthernetIpv4 {
-                                    operation: ArpOperation::Reply,
-                                    source_hardware_addr: self.magic_mac, // Use the "magic" MAC address
-                                    source_protocol_addr: target_protocol_addr, // Respond with the requested IP
-                                    target_hardware_addr: source_hardware_addr, // Send to the requester's MAC
-                                    target_protocol_addr: source_protocol_addr, // Send to the requester's IP
-                                };
-                                info!("creating response: {:?}", &response);
-                                let response_len = response.buffer_len();
-                                let mut response_buffer_1 = vec![0; response_len];
-
-                                let mut p =
-                                    ArpPacket::new_unchecked(response_buffer_1.as_mut_slice());
-                                response.emit(&mut p);
-
-                                packet.1.consume(
-                                    EthernetFrame::<&[u8]>::buffer_len(response_buffer_1.len()),
-                                    |response_bytes| {
-                                        let mut reply_frame =
-                                            EthernetFrame::new_unchecked(response_bytes);
-                                        reply_frame.set_dst_addr(source_hardware_addr);
-                                        reply_frame.set_src_addr(self.magic_mac);
-                                        reply_frame.set_ethertype(EthernetProtocol::Arp);
-
-                                        reply_frame
-                                            .payload_mut()
-                                            .copy_from_slice(&response_buffer_1);
-                                    },
-                                )
-                            }
-
-                            info!("made a funny");
-                            // we successfully intercepted the packet, and returned nothing
-                            return DriverResult::Retry;
+                                None => {}
+                            };
+                        }
+                        EthernetProtocol::Ipv4 => {
+                            self.router.intercept_ipv4_packet(frame);
                         }
                         _ => {}
-                    }
-                    if frame.ethertype() == EthernetProtocol::Ipv4 {
-                        let ipv4_packet = match Ipv4Packet::new_checked(frame.payload()) {
-                            Ok(p) => info!("ipv4 packet: {:?}", p),
-                            Err(e) => {
-                                info!("ipv4 packet parse failed: {:?}", e);
-                            }
-                        };
-                    }
-                    // Check if the destination MAC matches the expected one
-                    if dest_mac != self.expected_mac {
-                        info!("Unexpected MAC address: {}", dest_mac);
                     }
                 }
 
@@ -393,7 +555,7 @@ impl<D: NetDriver> NetDriver for WrapperDriver<D> {
 
     /// Get the link state.
     ///
-    /// This function must return the current link state of the device, and wake `cx.waker()` when
+    /// This function must return the current link state of  wake `cx.waker()` when
     /// the link state changes.
     fn link_state(&mut self, cx: &mut Context) -> LinkState {
         self.inner.link_state(cx)
@@ -471,7 +633,7 @@ async fn main(spawner: Spawner) {
     // to enable vbus_detection to comply with the USB spec. If you enable it, the board
     // has to support it or USB won't work at all. See docs on `vbus_detection` for details.
     config.vbus_detection = false;
-    let driver = Driver::new_fs(
+    let driver: StmUsbDriver = Driver::new_fs(
         peripherals_instance.USB_OTG_FS,
         Irqs,
         peripherals_instance.PA12,
@@ -509,6 +671,7 @@ async fn main(spawner: Spawner) {
 
     let (send_to_uart_task, receive_from_ibus_channel) = create_static_channel!();
     let (send_to_raw_socket, receive_from_uart_task_channel) = create_static_channel!();
+    let (send_to_usb_task, receive_from_raw_socket_channel) = create_static_channel!();
 
     // Create classes on the builder.
     static STATE: StaticCell<State> = StaticCell::new();
@@ -521,16 +684,41 @@ async fn main(spawner: Spawner) {
     // Run the USB device.
 
     static NET_STATE: StaticCell<NetState<MTU, 4, 4>> = StaticCell::new();
-    let (runner, device) =
-        class.into_embassy_net_device::<MTU, 4, 4>(NET_STATE.init(NetState::new()), our_mac_addr);
-    unwrap!(spawner.spawn(usb_ncm_task(runner)));
+    let net_state = NET_STATE.init(NetState::new());
+
+    let (tx_usb, rx_usb) = class.split();
+
+    let (runner, device) = embassy_net_driver_channel::new(
+        net_state,
+        embassy_net_driver_channel::driver::HardwareAddress::Ethernet(our_mac_addr),
+    );
+    let (state_runner, rx_runner, tx_runner) = runner.split();
+
+    //let runner = Runner {tx_usb, rx_usb, ch: runner};
+    // ALL THAT IS MISSING IS JUST TO USE THE LOGIC IN RUNNER AND PASS IT INTO 2 SEPARATE
+    // TASKS!
+    unwrap!(spawner.spawn(usb_reception_task_rx(rx_usb, rx_runner, state_runner)));
+    unwrap!(spawner.spawn(usb_sending_task_tx(
+        tx_usb,
+        tx_runner,
+        receive_from_raw_socket_channel
+    )));
+
+    let ipv4_route_rules = Ipv4Router {
+        gateway_address: Ipv4Addr::new(10, 0, 0, 1),
+        subnet: Ipv4Cidr::new(Ipv4Addr::new(10, 0, 0, 0), 24),
+        device_address: Ipv4Addr::new(10, 0, 0, 169),
+    };
+
+    const TEST_PC_ADDRESS: Ipv4Addr = Ipv4Addr::new(10, 1, 0, 100);
+
     let device_wrapper = WrapperDriver::new(
         device,
         EthernetAddress::from_bytes(&our_mac_addr),
-        EthernetAddress::from_bytes(&our_mac_addr),
-        Ipv4Cidr::new(Ipv4Addr::new(10, 0, 0, 0), 24),
-        Ipv4Addr::new(10, 0, 0, 169),
+        EthernetAddress::from_bytes(&magic_mac_addr),
         send_to_uart_task,
+        TEST_PC_ADDRESS,
+        &ipv4_route_rules,
     );
 
     // let config = embassy_net::Config::dhcpv4(Default::default());
@@ -568,9 +756,10 @@ async fn main(spawner: Spawner) {
 
     unwrap!(spawner.spawn(uart_rx_task(uart_receiver_component, send_to_raw_socket)));
 
-    unwrap!(spawner.spawn(ibus_traffic_to_ethernet_task(
-        stack,
+    unwrap!(spawner.spawn(ibus_ipv4_to_ethernet_task(
         receive_from_uart_task_channel,
-        send_to_uart_task
-    )))
+        send_to_usb_task,
+        EthernetAddress::from_bytes(&host_mac_addr),
+        EthernetAddress::from_bytes(&magic_mac_addr),
+    )));
 }

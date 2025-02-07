@@ -115,7 +115,7 @@ pub async fn coap_task(
     socket
         .bind(IpListenEndpoint {
             addr: None,
-            port: 1234,
+            port: 5683,
         })
         .expect("could not pind to port");
 
