@@ -15,23 +15,23 @@ use embassy_net::driver::{
 };
 use embassy_net::raw::RawSocket;
 use embassy_net::{EthernetAddress, Ipv4Cidr, StackResources};
-use embassy_net_driver_channel::{RxRunner, State as NetState, StateRunner, TxRunner};
-use embassy_stm32::mode::Async;
+use embassy_net_driver_channel::State as NetState;
 use embassy_stm32::usart::Config as UartConfig;
-use embassy_stm32::usart::{Uart, UartRx, UartTx};
+use embassy_stm32::usart::Uart;
 use embassy_stm32::usb::Driver;
 use embassy_stm32::{bind_interrupts, peripherals, rng, usart, usb, Config};
 use embassy_sync::blocking_mutex::raw::NoopRawMutex;
-use embassy_usb::class::cdc_ncm::embassy_net::{Device, Runner as UsbEmbassyNetRunner};
+use embassy_usb::class::cdc_ncm::embassy_net::Device;
 use embassy_usb::class::cdc_ncm::{
-    CdcNcmClass, Receiver as UsbReceiver, Sender as UsbSender, State,
+    CdcNcmClass, State,
 };
-use embassy_usb::{Builder, Config as UsbConfig, UsbDevice};
-use serial_line_ip::{Decoder, Encoder};
+use embassy_usb::{Builder, Config as UsbConfig};
+use ibus_redirect::{uart_rx_task, uart_tx_task};
 use smoltcp::phy::ChecksumCapabilities;
 use smoltcp::socket::raw::PacketMetadata as RawPacketMetadata;
 use smoltcp::wire::{EthernetFrame, Ipv4Packet};
 use smoltcp::wire::{EthernetProtocol, Ipv4Repr};
+use usb_setup::{usb_reception_task_rx, usb_sending_task_tx, usb_task, StmUsbDriver};
 
 use smoltcp::wire::{ArpOperation, ArpPacket, ArpRepr};
 
@@ -51,35 +51,25 @@ use embassy_sync::channel::{self};
 const MAX_MESSAGES_CHANNEL: usize = 15;
 
 use alloc::vec::Vec;
-type MessageChannel = channel::Channel<NoopRawMutex, Vec<u8>, MAX_MESSAGES_CHANNEL>;
-type ChannelSender = channel::Sender<'static, NoopRawMutex, Vec<u8>, MAX_MESSAGES_CHANNEL>;
-type ChannelReceiver = channel::Receiver<'static, NoopRawMutex, Vec<u8>, MAX_MESSAGES_CHANNEL>;
+pub type MessageChannel = channel::Channel<NoopRawMutex, Vec<u8>, MAX_MESSAGES_CHANNEL>;
+pub type ChannelSender = channel::Sender<'static, NoopRawMutex, Vec<u8>, MAX_MESSAGES_CHANNEL>;
+pub type ChannelReceiver = channel::Receiver<'static, NoopRawMutex, Vec<u8>, MAX_MESSAGES_CHANNEL>;
 
 use embedded_alloc::LlffHeap as Heap;
 mod coap;
+mod ibus_redirect;
+mod usb_setup;
 
 #[global_allocator]
 static HEAP: Heap = Heap::empty();
 
-type StmUsbDriver<'a> = embassy_stm32::usb::Driver<'a, peripherals::USB_OTG_FS>;
-
-const MTU: usize = 1514;
+pub const MTU: usize = 1514;
 
 use core::mem::MaybeUninit;
 const HEAP_SIZE: usize = 100_000;
 static mut HEAP_MEM: [MaybeUninit<u8>; HEAP_SIZE] = [MaybeUninit::uninit(); HEAP_SIZE];
 
 type MyDriver = Driver<'static, peripherals::USB_OTG_FS>;
-
-#[embassy_executor::task]
-async fn usb_task(mut device: UsbDevice<'static, MyDriver>) -> ! {
-    device.run().await
-}
-
-#[embassy_executor::task]
-async fn usb_ncm_task(class: UsbEmbassyNetRunner<'static, MyDriver, MTU>) -> ! {
-    class.run().await
-}
 
 #[embassy_executor::task]
 async fn net_task(
@@ -159,134 +149,6 @@ async fn ibus_traffic_to_ethernet_task(
                         .await;
                 }
             }
-        }
-    }
-}
-
-#[embassy_executor::task]
-async fn uart_rx_task(mut rx_uart: UartRx<'static, Async>, send_to_raw_socket: ChannelSender) -> ! {
-    let mut rx_buffer = [0; 2000];
-    let mut slip_decode_buffer = [0; 4000];
-
-    let slip_decode_buffer_slice = &mut slip_decode_buffer;
-
-    let mut slip_decoder = serial_line_ip::Decoder::new();
-    let mut next_packet = vec![];
-    loop {
-        let uart_read_bytes = match rx_uart.read_until_idle(&mut rx_buffer).await {
-            Ok(b) => b,
-            Err(e) => {
-                warn!("uart reception failed: {:?}", e);
-                continue;
-            }
-        };
-        info!("read: {} bytes", uart_read_bytes);
-        let mut read_slice = &rx_buffer[..uart_read_bytes];
-        while read_slice.len() != 0 {
-            match slip_decoder.decode(read_slice, slip_decode_buffer_slice) {
-                Ok((bytes_processed, output_slice, is_end_of_packet)) => {
-                    next_packet.extend_from_slice(output_slice);
-                    if is_end_of_packet {
-                        info!("sending decoded slip bytes to raw socket!");
-                        // mem::take clears the vector and leaves it empty
-                        send_to_raw_socket
-                            .send(core::mem::take(&mut next_packet))
-                            .await;
-                        read_slice = &read_slice[bytes_processed..];
-                        slip_decoder = Decoder::new();
-                    } else {
-                        warn!("split packet received: not very well tested");
-                    }
-                }
-                Err(e) => {
-                    // reset everything
-                    slip_decoder = Decoder::new();
-                    next_packet.clear();
-                    warn!("decoding failed: {:?}", Debug2Format(&e));
-                    read_slice = &[];
-                }
-            }
-        }
-    }
-}
-
-#[embassy_executor::task]
-async fn uart_tx_task(
-    mut tx_uart: UartTx<'static, Async>,
-    receive_from_raw_socket_to_uart: ChannelReceiver,
-) -> ! {
-    let mut encode_buffer = [0u8; 2000];
-    loop {
-        let mut encoder = Encoder::new();
-        let rx = receive_from_raw_socket_to_uart.receive().await;
-        let bytes_writen = match encoder.encode(&rx, &mut encode_buffer) {
-            Ok(t) => t.written,
-            Err(e) => {
-                warn!("slip decoding failed: {:?}", Debug2Format(&e));
-                continue;
-            }
-        };
-        match tx_uart.write(&encode_buffer[..bytes_writen]).await {
-            Ok(_) => {}
-            Err(e) => warn!("uart transmission failed: {:?}", e),
-        }
-    }
-}
-
-#[embassy_executor::task]
-async fn usb_reception_task_rx(
-    mut rx_usb: UsbReceiver<'static, StmUsbDriver<'static>>,
-    mut rx_chan: RxRunner<'static, MTU>,
-    state_chan: StateRunner<'static>,
-) -> ! {
-    loop {
-        trace!("WAITING for connection");
-        state_chan.set_link_state(LinkState::Down);
-
-        rx_usb.wait_connection().await.unwrap();
-
-        trace!("Connected");
-        state_chan.set_link_state(LinkState::Up);
-
-        loop {
-            let p = rx_chan.rx_buf().await;
-            match rx_usb.read_packet(p).await {
-                Ok(n) => rx_chan.rx_done(n),
-                Err(e) => {
-                    warn!("error reading packet: {:?}", e);
-                    break;
-                }
-            };
-        }
-    }
-}
-#[embassy_executor::task]
-async fn usb_sending_task_tx(
-    mut tx_usb: UsbSender<'static, StmUsbDriver<'static>>,
-    mut tx_chan: TxRunner<'static, MTU>,
-    receiver_for_ibus_packets: ChannelReceiver,
-) {
-    let mut holder_vec;
-    loop {
-        let rx_from_ibus_receiver = receiver_for_ibus_packets.receive();
-        let rx_from_stack = tx_chan.tx_buf();
-        let rx = select(rx_from_stack, rx_from_ibus_receiver).await;
-        let mut should_signal = false;
-        let recv_slice = match rx {
-            Either::First(s) => {
-                should_signal = true;
-                s
-            }
-            Either::Second(v) => {
-                holder_vec = v;
-                holder_vec.as_slice()
-            }
-        };
-        if let Err(e) = tx_usb.write_packet(recv_slice).await {
-            warn!("Failed to TX packet: {:?}", e);
-        }
-        if should_signal {
-            tx_chan.tx_done();
         }
     }
 }
