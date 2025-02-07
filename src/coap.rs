@@ -1,14 +1,13 @@
 use alloc::boxed::Box;
 use alloc::collections::btree_map::BTreeMap;
-use alloc::fmt::format;
 use alloc::string::{String, ToString};
 extern crate alloc;
-use alloc::{format, vec};
+use alloc::format;
 use coap_lite::{CoapRequest, CoapResponse, RequestType};
 use embassy_net::udp::{PacketMetadata, UdpSocket};
 
 use defmt::{info, warn, Debug2Format};
-use embassy_net::{EthernetAddress, IpEndpoint, IpListenEndpoint, Ipv4Cidr, StackResources};
+use embassy_net::{IpEndpoint, IpListenEndpoint};
 
 pub fn not_implemented(request: &CoapRequest<IpEndpoint>, response: &mut CoapResponse) {
     response.set_status(coap_lite::ResponseType::NotImplemented);

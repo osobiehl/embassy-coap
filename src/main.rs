@@ -3,36 +3,25 @@
 
 extern crate alloc;
 use coap::{coap_task, CoapStateManager, InfoResource};
-use core::cmp::Ordering;
-use core::future::Future;
-use core::marker::PhantomData;
 use core::net::Ipv4Addr;
-use core::ops::Deref;
-use core::pin::Pin;
 use core::ptr::addr_of_mut;
 use core::task::Context;
-use defmt::{panic, *};
+use defmt::*;
 use defmt_rtt as _; // global logger
 use embassy_executor::Spawner;
-use embassy_futures::join::join;
-use embassy_futures::select::{self, select, Either};
+use embassy_futures::select::{select, Either};
 use embassy_net::driver::{
     Capabilities, Driver as NetDriver, HardwareAddress, LinkState, RxToken, TxToken,
 };
 use embassy_net::raw::RawSocket;
-use embassy_net::tcp::TcpSocket;
-use embassy_net::{
-    ConfigV4, EthernetAddress, IpEndpoint, IpListenEndpoint, Ipv4Cidr, StackResources,
-};
-use embassy_net_driver_channel::{
-    Runner as ChannelRunner, RxRunner, State as NetState, StateRunner, TxRunner,
-};
-use embassy_stm32::mode::{Async, Mode};
+use embassy_net::{EthernetAddress, Ipv4Cidr, StackResources};
+use embassy_net_driver_channel::{RxRunner, State as NetState, StateRunner, TxRunner};
+use embassy_stm32::mode::Async;
 use embassy_stm32::usart::Config as UartConfig;
 use embassy_stm32::usart::{Uart, UartRx, UartTx};
-use embassy_stm32::usb::{Driver, Instance};
+use embassy_stm32::usb::Driver;
 use embassy_stm32::{bind_interrupts, peripherals, rng, usart, usb, Config};
-use embassy_sync::blocking_mutex::raw::{CriticalSectionRawMutex, NoopRawMutex};
+use embassy_sync::blocking_mutex::raw::NoopRawMutex;
 use embassy_usb::class::cdc_ncm::embassy_net::{Device, Runner as UsbEmbassyNetRunner};
 use embassy_usb::class::cdc_ncm::{
     CdcNcmClass, Receiver as UsbReceiver, Sender as UsbSender, State,
@@ -57,7 +46,7 @@ bind_interrupts!(struct Irqs {
 });
 
 use alloc::vec;
-use embassy_sync::channel::{self, Receiver, Sender};
+use embassy_sync::channel::{self};
 
 const MAX_MESSAGES_CHANNEL: usize = 15;
 
