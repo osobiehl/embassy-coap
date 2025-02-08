@@ -2,16 +2,11 @@ extern crate alloc;
 use defmt::*;
 use defmt_rtt as _; // global logger
 use embassy_futures::select::{select, Either};
-use embassy_net::driver::{
-    Driver as NetDriver, LinkState,
-};
+use embassy_net::driver::{Driver as NetDriver, LinkState};
 use embassy_net_driver_channel::{RxRunner, StateRunner, TxRunner};
 use embassy_stm32::peripherals;
-use embassy_usb::class::cdc_ncm::{
-    Receiver as UsbReceiver, Sender as UsbSender,
-};
+use embassy_usb::class::cdc_ncm::{Receiver as UsbReceiver, Sender as UsbSender};
 use embassy_usb::UsbDevice;
-
 
 use panic_probe as _;
 

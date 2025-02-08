@@ -22,9 +22,7 @@ use embassy_stm32::usb::Driver;
 use embassy_stm32::{bind_interrupts, peripherals, rng, usart, usb, Config};
 use embassy_sync::blocking_mutex::raw::NoopRawMutex;
 use embassy_usb::class::cdc_ncm::embassy_net::Device;
-use embassy_usb::class::cdc_ncm::{
-    CdcNcmClass, State,
-};
+use embassy_usb::class::cdc_ncm::{CdcNcmClass, State};
 use embassy_usb::{Builder, Config as UsbConfig};
 use ibus_redirect::{uart_rx_task, uart_tx_task};
 use smoltcp::phy::ChecksumCapabilities;
@@ -440,16 +438,9 @@ async fn main(spawner: Spawner) {
     {
         use embassy_stm32::rcc::*;
         config.rcc.hsi = true;
-        config.rcc.pll1 = Some(Pll {
-            source: PllSource::HSI, // 16 MHz
-            prediv: PllPreDiv::DIV1,
-            mul: PllMul::MUL10,
-            divp: None,
-            divq: None,
-            divr: Some(PllDiv::DIV1), // 160 MHz
-        });
-        config.rcc.sys = Sysclk::PLL1_R;
-        config.rcc.voltage_range = VoltageScale::RANGE1;
+        config.rcc.msis = Some(MSIRange::RANGE_48MHZ);
+        config.rcc.sys = Sysclk::MSIS;
+        config.rcc.voltage_range = VoltageScale::RANGE2;
         config.rcc.hsi48 = Some(Hsi48Config {
             sync_from_usb: true,
         }); // needed for USB

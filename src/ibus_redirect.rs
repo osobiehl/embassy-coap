@@ -6,7 +6,6 @@ use embassy_stm32::mode::Async;
 use embassy_stm32::usart::{UartRx, UartTx};
 use serial_line_ip::{Decoder, Encoder};
 
-
 use crate::{ChannelReceiver, ChannelSender};
 use alloc::vec;
 use panic_probe as _;
@@ -38,7 +37,7 @@ pub async fn uart_rx_task(
                 Ok((bytes_processed, output_slice, is_end_of_packet)) => {
                     next_packet.extend_from_slice(output_slice);
                     if is_end_of_packet {
-                        info!("sending decoded slip bytes to raw socket!");
+                        info!("sending decoded slip bytes to ethernet redirect");
                         // mem::take clears the vector and leaves it empty
                         send_to_raw_socket
                             .send(core::mem::take(&mut next_packet))

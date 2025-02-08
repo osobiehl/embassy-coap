@@ -416,42 +416,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "embassy-stm32u5-examples"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "coap-lite",
- "cortex-m",
- "cortex-m-rt",
- "defmt",
- "defmt-rtt",
- "embassy-executor",
- "embassy-futures",
- "embassy-net",
- "embassy-net-driver-channel",
- "embassy-stm32",
- "embassy-sync",
- "embassy-time",
- "embassy-usb",
- "embassy-usb-driver",
- "embassy-usb-synopsys-otg",
- "embedded-alloc",
- "embedded-graphics",
- "embedded-hal 0.2.7",
- "embedded-io-async",
- "heapless",
- "micromath",
- "panic-probe",
- "rand_core",
- "serial-line-ip",
- "smoltcp",
- "static_cell",
- "tinybmp",
- "usb-device",
- "usbd-ethernet",
-]
-
-[[package]]
 name = "embassy-sync"
 version = "0.6.2"
 source = "git+https://github.com/embassy-rs/embassy?rev=1b44034#1b440342085a0a4f752c795937cc038b41ca1e78"
@@ -742,6 +706,42 @@ dependencies = [
  "defmt",
  "hash32",
  "stable_deref_trait",
+]
+
+[[package]]
+name = "ibus-in-rust"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "coap-lite",
+ "cortex-m",
+ "cortex-m-rt",
+ "defmt",
+ "defmt-rtt",
+ "embassy-executor",
+ "embassy-futures",
+ "embassy-net",
+ "embassy-net-driver-channel",
+ "embassy-stm32",
+ "embassy-sync",
+ "embassy-time",
+ "embassy-usb",
+ "embassy-usb-driver",
+ "embassy-usb-synopsys-otg",
+ "embedded-alloc",
+ "embedded-graphics",
+ "embedded-hal 0.2.7",
+ "embedded-io-async",
+ "heapless",
+ "micromath",
+ "panic-probe",
+ "rand_core",
+ "serial-line-ip",
+ "smoltcp",
+ "static_cell",
+ "tinybmp",
+ "usb-device",
+ "usbd-ethernet",
 ]
 
 [[package]]
