@@ -8,7 +8,6 @@ use serial_line_ip::{Decoder, Encoder};
 
 use crate::{log_packet, ChannelReceiver, ChannelSender};
 use alloc::vec;
-use embassy_sync::channel::{Channel, Receiver, Sender};
 use panic_probe as _;
 
 #[embassy_executor::task]
@@ -43,7 +42,7 @@ pub async fn uart_rx_task(rx_uart: UartRx<'static, Async>, send_to_raw_socket: C
                     // Remove the processed bytes from the buffer
                     slip_state_buffer.drain(..bytes_processed);
                     if is_end_of_packet {
-                        info!("Sending decoded SLIP bytes to Ethernet redirect");
+                        debug!("Sending decoded SLIP bytes to Ethernet redirect");
                         log_packet(&next_packet, "Packet right after recording");
                         // mem::take clears the vector and leaves it empty
                         send_to_raw_socket
@@ -86,7 +85,7 @@ pub async fn uart_tx_task(
                 continue;
             }
         };
-        info!("writing slip {:?} encoded bytes to ibus", bytes_written);
+        debug!("writing slip {:?} encoded bytes to ibus", bytes_written);
         let finish_byte = match encoder.finish(&mut encode_buffer[bytes_written..]) {
             Ok(b) => b.written,
             Err(e) => {

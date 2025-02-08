@@ -9,11 +9,9 @@ use core::task::Context;
 use defmt::*;
 use defmt_rtt as _; // global logger
 use embassy_executor::Spawner;
-use embassy_futures::select::{select, Either};
 use embassy_net::driver::{
     Capabilities, Driver as NetDriver, HardwareAddress, LinkState, RxToken, TxToken,
 };
-use embassy_net::raw::RawSocket;
 use embassy_net::{EthernetAddress, Ipv4Cidr, StackResources};
 use embassy_net_driver_channel::State as NetState;
 use embassy_stm32::usart::Config as UartConfig;
@@ -26,8 +24,7 @@ use embassy_usb::class::cdc_ncm::{CdcNcmClass, State};
 use embassy_usb::{Builder, Config as UsbConfig};
 use ibus_redirect::{uart_rx_task, uart_tx_task};
 use smoltcp::phy::ChecksumCapabilities;
-use smoltcp::socket::raw::PacketMetadata as RawPacketMetadata;
-use smoltcp::wire::{EthernetFrame, Ipv4Packet, UdpPacket, UdpRepr};
+use smoltcp::wire::{EthernetFrame, Ipv4Packet, UdpPacket};
 use smoltcp::wire::{EthernetProtocol, Ipv4Repr};
 use usb_setup::{usb_reception_task_rx, usb_sending_task_tx, usb_task, StmUsbDriver};
 
@@ -67,8 +64,6 @@ use core::mem::MaybeUninit;
 const HEAP_SIZE: usize = 100_000;
 static mut HEAP_MEM: [MaybeUninit<u8>; HEAP_SIZE] = [MaybeUninit::uninit(); HEAP_SIZE];
 
-type MyDriver = Driver<'static, peripherals::USB_OTG_FS>;
-
 #[embassy_executor::task]
 async fn net_task(
     mut runner: embassy_net::Runner<'static, WrapperDriver<Device<'static, MTU>>>,
@@ -100,57 +95,6 @@ async fn ibus_ipv4_to_ethernet_task(
         send_packets_from_ibus_to_ethernet_task
             .send(eth_buf_vec)
             .await;
-    }
-}
-
-#[embassy_executor::task]
-async fn ibus_traffic_to_ethernet_task(
-    stack: embassy_net::Stack<'static>,
-    receive_from_uart_to_send_via_ethernet: ChannelReceiver,
-    send_packets_from_raw_socket_to_uart: ChannelSender,
-    router: Ipv4Router,
-) -> ! {
-    let mut rx_buffer = [0; 4096];
-    let mut rx_metadata_buffer = [RawPacketMetadata::EMPTY; 10];
-    let mut tx_buffer = [0; 4096];
-    let mut tx_metadata_buffer = [RawPacketMetadata::EMPTY; 10];
-
-    let raw_socket = RawSocket::new::<WrapperDriver<Device<'static, MTU>>>(
-        stack,
-        smoltcp::wire::IpVersion::Ipv4,
-        smoltcp::wire::IpProtocol::Udp,
-        &mut rx_metadata_buffer,
-        &mut rx_buffer,
-        &mut tx_metadata_buffer,
-        &mut tx_buffer,
-    );
-    let mut reception_buffer = [0; 2000];
-
-    loop {
-        let receive_to_send_to_ibus = receive_from_uart_to_send_via_ethernet.receive();
-        let receive_from_raw_socket = raw_socket.recv(&mut reception_buffer);
-        let future_selection = select(receive_to_send_to_ibus, receive_from_raw_socket).await;
-        match future_selection {
-            Either::First(packet_to_send_to_eth) => {
-                info!("routing packet to send to ethernet interface");
-                raw_socket.send(&packet_to_send_to_eth).await;
-            }
-            Either::Second(raw_packet) => {
-                let rx_packet = raw_packet.unwrap();
-                let packet = Ipv4Packet::new_checked(&reception_buffer[..rx_packet]).unwrap();
-
-                if router.is_ipv4_packet_valid_for_routing(packet.clone()) {
-                    let repr = Ipv4Repr::parse(&packet, &ChecksumCapabilities::default())
-                        .expect("ipv4 repr parse failed");
-                    info!("routing packet received on raw socket: ");
-                    info!("packet repr: {:?}", repr);
-
-                    send_packets_from_raw_socket_to_uart
-                        .send(reception_buffer[..rx_packet].to_vec())
-                        .await;
-                }
-            }
-        }
     }
 }
 
@@ -226,7 +170,7 @@ impl WrapperIbusRouter {
                 target_hardware_addr: *source_hardware_addr,      // Send to the requester's MAC
                 target_protocol_addr: *source_protocol_addr,      // Send to the requester's IP
             };
-            info!("creating response for: {:?}", repr);
+            debug!("creating response for: {:?}", repr);
             return Some((response, *source_hardware_addr));
         } else {
             return None;
@@ -236,18 +180,17 @@ impl WrapperIbusRouter {
     pub fn intercept_ipv4_packet(&self, packet: EthernetFrame<&[u8]>) {
         match Ipv4Packet::new_checked(packet.payload()) {
             Ok(valid_packet) => {
-                //info!("ipv4 packet: {:?}", valid_packet);
                 if self
                     .ipv4_router
                     .is_ipv4_packet_valid_for_routing(valid_packet.clone())
                 {
                     let vec_packet = valid_packet.into_inner().to_vec();
-                    info!("routing packet to send to redirect task from ethernet ipv4");
+                    debug!("routing packet to send to redirect task from ethernet ipv4");
                     match self.sender_to_redirect_task.try_send(vec_packet) {
                         Err(_) => {
-                            info!("failed to send packet to redirect task because it is full")
+                            warn!("failed to send packet to redirect task because it is full")
                         }
-                        Ok(()) => info!("succesfully routed packet"),
+                        Ok(()) => debug!("succesfully routed packet"),
                     };
                 }
             }
@@ -302,7 +245,8 @@ impl<D: NetDriver> WrapperDriver<D> {
                             }
                             match self.router.intercept_arp_repr(&arp_repr) {
                                 Some((response, to)) => {
-                                    info!("doing response intercept");
+                                    debug!("arp packet reply: {:?} to {:?}", &response, &to);
+
                                     let response_len = response.buffer_len();
                                     let mut response_buffer_1 = vec![0; response_len];
 
@@ -325,8 +269,11 @@ impl<D: NetDriver> WrapperDriver<D> {
                                                 .copy_from_slice(&response_buffer_1);
                                         },
                                     );
+                                    info!(
+                                        "created ARP response for {:?}",
+                                        arp_packet.source_protocol_addr()
+                                    );
 
-                                    info!("made a funny");
                                     // we successfully intercepted the packet, and returned nothing
                                     return DriverResult::Retry;
                                 }
@@ -433,10 +380,13 @@ impl<D: NetDriver> NetDriver for WrapperDriver<D> {
 pub fn log_packet(receive_ipv4_packet: &[u8], msg: &str) {
     match Ipv4Packet::new_checked(&receive_ipv4_packet) {
         Ok(packet) => {
-            let repr = Ipv4Repr::parse(&packet, &ChecksumCapabilities::default())
-                .expect("ipv4 repr parse failed");
-            info!("{}", msg);
-            info!("packet repr: {:?}", repr);
+            let Ok(repr) = Ipv4Repr::parse(&packet, &ChecksumCapabilities::default()) else {
+                debug!("packet log: not a packet");
+                return;
+            };
+
+            debug!("{}", msg);
+            debug!("packet repr: {:?}", repr);
             if let Ok(udp) = UdpPacket::new_checked(packet.payload()) {
                 udp.src_port();
                 udp.dst_port();
@@ -529,7 +479,7 @@ async fn main(spawner: Spawner) {
 
     let mut config = UsbConfig::new(0xc0de, 0xcafe);
     config.manufacturer = Some("Mad Joe");
-    config.product = Some("USB-Ethernet example");
+    config.product = Some("IBUS adapter V2");
     config.serial_number = Some("12345678");
     config.max_power = 100;
     config.max_packet_size_0 = 64;
