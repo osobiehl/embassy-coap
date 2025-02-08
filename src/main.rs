@@ -27,7 +27,7 @@ use embassy_usb::{Builder, Config as UsbConfig};
 use ibus_redirect::{uart_rx_task, uart_tx_task};
 use smoltcp::phy::ChecksumCapabilities;
 use smoltcp::socket::raw::PacketMetadata as RawPacketMetadata;
-use smoltcp::wire::{EthernetFrame, Ipv4Packet};
+use smoltcp::wire::{EthernetFrame, Ipv4Packet, UdpPacket, UdpRepr};
 use smoltcp::wire::{EthernetProtocol, Ipv4Repr};
 use usb_setup::{usb_reception_task_rx, usb_sending_task_tx, usb_task, StmUsbDriver};
 
@@ -85,6 +85,9 @@ async fn ibus_ipv4_to_ethernet_task(
 ) {
     loop {
         let receive_ipv4_packet = receive_packets_from_ibus_ipv4.receive().await;
+
+        log_packet(&receive_ipv4_packet, "POV of task sending to ethernet");
+
         let eth_frame_len = EthernetFrame::<&[u8]>::buffer_len(receive_ipv4_packet.len());
         let mut eth_buf_vec = vec![0; eth_frame_len];
         let mut eth_frame = EthernetFrame::new_unchecked(&mut eth_buf_vec);
@@ -239,6 +242,7 @@ impl WrapperIbusRouter {
                     .is_ipv4_packet_valid_for_routing(valid_packet.clone())
                 {
                     let vec_packet = valid_packet.into_inner().to_vec();
+                    info!("routing packet to send to redirect task from ethernet ipv4");
                     match self.sender_to_redirect_task.try_send(vec_packet) {
                         Err(_) => {
                             info!("failed to send packet to redirect task because it is full")
@@ -398,7 +402,6 @@ impl<D: NetDriver> NetDriver for WrapperDriver<D> {
     }
 
     fn transmit(&mut self, cx: &mut Context) -> Option<Self::TxToken<'_>> {
-        let waker = cx.waker().clone();
         self.inner.transmit(cx)
     }
 
@@ -427,6 +430,30 @@ impl<D: NetDriver> NetDriver for WrapperDriver<D> {
     // ...
 }
 
+pub fn log_packet(receive_ipv4_packet: &[u8], msg: &str) {
+    match Ipv4Packet::new_checked(&receive_ipv4_packet) {
+        Ok(packet) => {
+            let repr = Ipv4Repr::parse(&packet, &ChecksumCapabilities::default())
+                .expect("ipv4 repr parse failed");
+            info!("{}", msg);
+            info!("packet repr: {:?}", repr);
+            if let Ok(udp) = UdpPacket::new_checked(packet.payload()) {
+                udp.src_port();
+                udp.dst_port();
+                info!(
+                    "udp packet: src: {:?}, dst: {:?}",
+                    udp.src_port(),
+                    udp.dst_port()
+                )
+            } else {
+                warn!("packet is not udp packet");
+            }
+        }
+
+        Err(e) => warn!("packet parse failed: {:?}", e),
+    }
+}
+
 #[embassy_executor::main]
 async fn main(spawner: Spawner) {
     info!("Hello World!");
@@ -436,11 +463,27 @@ async fn main(spawner: Spawner) {
 
     let mut config = Config::default();
     {
+        //        use embassy_stm32::rcc::*;
+        //        config.rcc.hsi = true;
+        //        config.rcc.msis = Some(MSIRange::RANGE_48MHZ);
+        //        config.rcc.sys = Sysclk::MSIS;
+        //        config.rcc.voltage_range = VoltageScale::RANGE2;
+        //        config.rcc.hsi48 = Some(Hsi48Config {
+        //            sync_from_usb: true,
+        //        }); // needed for USB
+        //        config.rcc.mux.iclksel = mux::Iclksel::HSI48; // USB uses ICLK
         use embassy_stm32::rcc::*;
         config.rcc.hsi = true;
-        config.rcc.msis = Some(MSIRange::RANGE_48MHZ);
-        config.rcc.sys = Sysclk::MSIS;
-        config.rcc.voltage_range = VoltageScale::RANGE2;
+        config.rcc.pll1 = Some(Pll {
+            source: PllSource::HSI, // 16 MHz
+            prediv: PllPreDiv::DIV1,
+            mul: PllMul::MUL10,
+            divp: None,
+            divq: None,
+            divr: Some(PllDiv::DIV1), // 160 MHz
+        });
+        config.rcc.sys = Sysclk::PLL1_R;
+        config.rcc.voltage_range = VoltageScale::RANGE1;
         config.rcc.hsi48 = Some(Hsi48Config {
             sync_from_usb: true,
         }); // needed for USB
@@ -485,7 +528,7 @@ async fn main(spawner: Spawner) {
     );
 
     let mut config = UsbConfig::new(0xc0de, 0xcafe);
-    config.manufacturer = Some("Embassy");
+    config.manufacturer = Some("Mad Joe");
     config.product = Some("USB-Ethernet example");
     config.serial_number = Some("12345678");
     config.max_power = 100;

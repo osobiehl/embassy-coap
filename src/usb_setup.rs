@@ -9,6 +9,8 @@ use embassy_usb::class::cdc_ncm::{Receiver as UsbReceiver, Sender as UsbSender};
 use embassy_usb::UsbDevice;
 
 use panic_probe as _;
+use smoltcp::phy::ChecksumCapabilities;
+use smoltcp::wire::{Ipv4Packet, Ipv4Repr};
 
 use crate::{ChannelReceiver, MTU};
 
@@ -72,6 +74,7 @@ pub async fn usb_sending_task_tx(
         if let Err(e) = tx_usb.write_packet(recv_slice).await {
             warn!("Failed to TX packet: {:?}", e);
         }
+        info!("usb packet written!");
         if should_signal {
             tx_chan.tx_done();
         }

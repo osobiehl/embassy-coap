@@ -5,19 +5,32 @@ version = "0.1.0"
 license = "MIT OR Apache-2.0"
 
 [dependencies]
-# Change stm32u5g9zj to your chip name, if necessary.
-embassy-stm32 = { git = "https://github.com/embassy-rs/embassy", rev = "1b44034", features = ["defmt", "unstable-pac", "stm32u575zi", "time-driver-any", "memory-x" ]  }
-embassy-sync = { git = "https://github.com/embassy-rs/embassy", rev = "1b44034" }
-embassy-executor = { version = "0.7.0", git = "https://github.com/embassy-rs/embassy", rev = "1b44034", features = ["task-arena-size-98304", "arch-cortex-m", "executor-thread", "defmt"] }
-embassy-time = { version = "0.4.0", git = "https://github.com/embassy-rs/embassy", rev = "1b44034", features = ["defmt", "defmt-timestamp-uptime", "tick-hz-32_768"] }
-embassy-usb = { version = "0.4.0", git = "https://github.com/embassy-rs/embassy", rev = "1b44034", features = ["defmt"] }
-embassy-futures = { version = "0.1.0", git = "https://github.com/embassy-rs/embassy", rev = "1b44034" }
-embassy-net = {  version = "0.6.0", git = "https://github.com/embassy-rs/embassy", rev = "1b44034", features = ["defmt", "tcp", "udp", "raw", "dhcpv4", "medium-ethernet", "dns", "proto-ipv4", "proto-ipv6", "multicast"] }
+#embassy-stm32 = { git = "https://github.com/osobiehl/embassy", rev = "2679bff", features = ["defmt", "unstable-pac", "stm32u575zi", "time-driver-any", "memory-x" ]  }
+#embassy-sync = { git = "https://github.com/osobiehl/embassy", rev = "2679bff" }
+#embassy-executor = { version = "0.7.0", git = "https://github.com/osobiehl/embassy", rev = "2679bff", features = ["task-arena-size-98304", "arch-cortex-m", "executor-thread", "defmt"] }
+#embassy-time = { version = "0.4.0", git = "https://github.com/osobiehl/embassy", rev = "2679bff", features = ["defmt", "defmt-timestamp-uptime", "tick-hz-32_768"] }
+#embassy-usb = { version = "0.4.0", git = "https://github.com/osobiehl/embassy", rev = "2679bff", features = ["defmt"] }
+#embassy-futures = { version = "0.1.0", git = "https://github.com/osobiehl/embassy", rev = "2679bff" }
+#embassy-net = {  version = "0.6.0", git = "https://github.com/osobiehl/embassy", rev = "2679bff", features = ["defmt", "tcp", "udp", "raw", "dhcpv4", "medium-ethernet", "dns", "proto-ipv4", "proto-ipv6", "multicast"] }
+#
+#embassy-net-driver-channel= {   git = "https://github.com/osobiehl/embassy", rev = "2679bff", features = [] }
+#embassy-usb-driver = { git = "https://github.com/osobiehl/embassy", rev = "2679bff", features = [] }
+#
+#embassy-usb-synopsys-otg = { git = "https://github.com/osobiehl/embassy", rev = "2679bff", features = [] }
 
-embassy-net-driver-channel= {   git = "https://github.com/embassy-rs/embassy", rev = "1b44034", features = [] }
-embassy-usb-driver = { git = "https://github.com/embassy-rs/embassy", rev = "1b44034", features = [] }
+embassy-stm32 = { path = "../embassy/embassy-stm32/", features = ["defmt", "unstable-pac", "stm32u575zi", "time-driver-any", "memory-x" ]  }
+embassy-sync = { path = "../embassy/embassy-sync/" }
+embassy-executor = { version = "0.7.0", path = "../embassy/embassy-executor", features = ["task-arena-size-98304", "arch-cortex-m", "executor-thread", "defmt"] }
+embassy-time = { version = "0.4.0", path = "../embassy/embassy-time/", features = ["defmt", "defmt-timestamp-uptime", "tick-hz-32_768"] }
+embassy-usb = { version = "0.4.0", path = "../embassy/embassy-usb", features = ["defmt"] }
+embassy-futures = { version = "0.1.0", path = "../embassy/embassy-futures" }
+embassy-net = {  version = "0.6.0", path = "../embassy/embassy-net", features = ["defmt", "tcp", "udp", "raw", "dhcpv4", "medium-ethernet", "dns", "proto-ipv4", "proto-ipv6", "multicast"] }
 
-embassy-usb-synopsys-otg = { git = "https://github.com/embassy-rs/embassy", rev = "1b44034", features = [] }
+embassy-net-driver-channel= {   path = "../embassy/embassy-net-driver-channel", features = [] }
+embassy-usb-driver = { path = "../embassy/embassy-usb-driver/", features = [] }
+
+embassy-usb-synopsys-otg = { path = "../embassy/embassy-usb-synopsys-otg/", features = [] }
+
 
 defmt = "0.3"
 defmt-rtt = "0.4"
