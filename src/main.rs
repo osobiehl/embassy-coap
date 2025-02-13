@@ -14,11 +14,23 @@ use embassy_net::driver::{
 };
 use embassy_net::{EthernetAddress, Ipv4Cidr, StackResources};
 use embassy_net_driver_channel::State as NetState;
+use embassy_stm32::gpio::{self, Flex, Pin};
+use embassy_stm32::time::Hertz;
+use embassy_stm32::timer::input_capture::{CapturePin, Ch1};
+use embassy_stm32::timer::low_level::{InputCaptureMode, Timer, TriggerSource};
+use embassy_stm32::timer::Channel;
 use embassy_stm32::usart::Config as UartConfig;
 use embassy_stm32::usart::Uart;
 use embassy_stm32::usb::Driver;
-use embassy_stm32::{bind_interrupts, peripherals, rng, usart, usb, Config};
+use embassy_stm32::{
+    bind_interrupts,
+    gpio::{AfType, AnyPin, Input},
+    peripherals,
+    peripherals::PD12,
+    rng, usart, usb, Config,
+};
 use embassy_sync::blocking_mutex::raw::NoopRawMutex;
+use embassy_time::Timer as HighLevelTimer;
 use embassy_usb::class::cdc_ncm::embassy_net::Device;
 use embassy_usb::class::cdc_ncm::{CdcNcmClass, State};
 use embassy_usb::{Builder, Config as UsbConfig};
@@ -63,6 +75,52 @@ pub const MTU: usize = 1514;
 use core::mem::MaybeUninit;
 const HEAP_SIZE: usize = 100_000;
 static mut HEAP_MEM: [MaybeUninit<u8>; HEAP_SIZE] = [MaybeUninit::uninit(); HEAP_SIZE];
+
+pub struct CarrierSenseTimer {
+    timer: Timer<'static, peripherals::TIM4>,
+    pin: CapturePin<'static, peripherals::TIM4, Ch1>,
+}
+
+impl CarrierSenseTimer {
+    const UART_WORDS_PER_TICK: usize = 2;
+    const UART_NUMBER_OF_BITS_TO_WAIT: usize = 40; // wait for 4 possible messages
+    pub fn new(timer4: peripherals::TIM4, pin: PD12) -> Self {
+        let capture_pin = CapturePin::new_ch1(pin, gpio::Pull::Up);
+
+        let mut timer4 = Timer::new(timer4);
+        timer4.set_input_capture_mode(Channel::Ch1, InputCaptureMode::BothEdges);
+        //timer4.set_trigger_source(TriggerSource::
+        //timer4.set_trigger_source(TriggerSource::TI1FP1);
+        timer4.set_slave_mode(embassy_stm32::timer::low_level::SlaveMode::RESET_MODE);
+        timer4.set_tick_freq(Hertz::mhz(1));
+        timer4.enable_channel(Channel::Ch1, true);
+        timer4.set_autoreload_preload(false);
+        timer4.set_output_compare_mode(
+            Channel::Ch2,
+            embassy_stm32::timer::low_level::OutputCompareMode::Frozen,
+        );
+        timer4.regs_core().cr1().modify(|r| r.set_opm(true));
+        timer4.regs_core().arr().modify(|arr| arr.set_arr(0xFF));
+        timer4.set_autoreload_preload(false);
+        timer4.start();
+        Self {
+            timer: timer4,
+            pin: capture_pin,
+        }
+    }
+    pub fn line_idle(&self) -> bool {
+        let count = self.timer.regs_core().cnt().read().cnt();
+        info!("count: {:?}", count);
+        let is_count_ready = count
+            > (Self::UART_WORDS_PER_TICK * Self::UART_NUMBER_OF_BITS_TO_WAIT)
+                .try_into()
+                .expect("u16 overflow");
+        if !is_count_ready {
+            info!("someone is sending on the line, warning!");
+        }
+        return is_count_ready;
+    }
+}
 
 #[embassy_executor::task]
 async fn net_task(
@@ -404,6 +462,14 @@ pub fn log_packet(receive_ipv4_packet: &[u8], msg: &str) {
     }
 }
 
+#[embassy_executor::task]
+async fn timer_idle_task(timer: CarrierSenseTimer) {
+    loop {
+        HighLevelTimer::after_millis(1).await;
+        let _ = timer.line_idle();
+    }
+}
+
 #[embassy_executor::main]
 async fn main(spawner: Spawner) {
     info!("Hello World!");
@@ -443,6 +509,9 @@ async fn main(spawner: Spawner) {
     let peripherals_instance = embassy_stm32::init(config);
     let mut config = UartConfig::default();
     config.baudrate = 1_000_000;
+
+    let timer4 = peripherals_instance.TIM4;
+    let timer = CarrierSenseTimer::new(timer4, peripherals_instance.PD12);
 
     let uart = Uart::new(
         peripherals_instance.USART2,
@@ -589,6 +658,7 @@ async fn main(spawner: Spawner) {
         receive_from_ibus_channel
     )));
 
+    //unwrap!(spawner.spawn(timer_idle_task(timer)));
     unwrap!(spawner.spawn(uart_rx_task(uart_receiver_component, send_to_raw_socket)));
 
     unwrap!(spawner.spawn(ibus_ipv4_to_ethernet_task(
