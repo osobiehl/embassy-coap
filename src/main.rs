@@ -82,27 +82,24 @@ pub struct CarrierSenseTimer {
 }
 
 impl CarrierSenseTimer {
-    const UART_WORDS_PER_TICK: usize = 2;
-    const UART_NUMBER_OF_BITS_TO_WAIT: usize = 40; // wait for 4 possible messages
+    const UART_WORDS_PER_TICK: u16 = 2;
+    const UART_NUMBER_OF_BITS_TO_WAIT: u16 = 4; // wait for 4 possible messages
+    const WAIT_MICROSECONDS: u16 = (Self::UART_WORDS_PER_TICK * Self::UART_NUMBER_OF_BITS_TO_WAIT);
     pub fn new(timer4: peripherals::TIM4, pin: PD12) -> Self {
-        let capture_pin = CapturePin::new_ch1(pin, gpio::Pull::Up);
+        let capture_pin = CapturePin::new_ch1(pin, gpio::Pull::None);
 
         let mut timer4 = Timer::new(timer4);
-        timer4.set_input_capture_mode(Channel::Ch1, InputCaptureMode::BothEdges);
-        //timer4.set_trigger_source(TriggerSource::
-        //timer4.set_trigger_source(TriggerSource::TI1FP1);
-        timer4.set_slave_mode(embassy_stm32::timer::low_level::SlaveMode::RESET_MODE);
-        timer4.set_tick_freq(Hertz::mhz(1));
+        timer4.set_input_capture_mode(Channel::Ch1, InputCaptureMode::Rising);
         timer4.enable_channel(Channel::Ch1, true);
+        timer4.set_trigger_source(TriggerSource::TI1FP1);
+        timer4.set_slave_mode(embassy_stm32::timer::low_level::SlaveMode::COMBINED_RESET_TRIGGER);
+        timer4.set_tick_freq(Hertz::mhz(1));
+        timer4
+            .regs_basic()
+            .arr()
+            .write(|arr| arr.set_arr(Self::WAIT_MICROSECONDS));
+        timer4.regs_basic().cr1().modify(|r| r.set_opm(true));
         timer4.set_autoreload_preload(false);
-        timer4.set_output_compare_mode(
-            Channel::Ch2,
-            embassy_stm32::timer::low_level::OutputCompareMode::Frozen,
-        );
-        timer4.regs_core().cr1().modify(|r| r.set_opm(true));
-        timer4.regs_core().arr().modify(|arr| arr.set_arr(0xFF));
-        timer4.set_autoreload_preload(false);
-        timer4.start();
         Self {
             timer: timer4,
             pin: capture_pin,
@@ -110,11 +107,10 @@ impl CarrierSenseTimer {
     }
     pub fn line_idle(&self) -> bool {
         let count = self.timer.regs_core().cnt().read().cnt();
-        info!("count: {:?}", count);
-        let is_count_ready = count
-            > (Self::UART_WORDS_PER_TICK * Self::UART_NUMBER_OF_BITS_TO_WAIT)
-                .try_into()
-                .expect("u16 overflow");
+        if count != 0 {
+            info!("count: {:?}", count);
+        }
+        let is_count_ready = count == 0;
         if !is_count_ready {
             info!("someone is sending on the line, warning!");
         }
@@ -465,7 +461,7 @@ pub fn log_packet(receive_ipv4_packet: &[u8], msg: &str) {
 #[embassy_executor::task]
 async fn timer_idle_task(timer: CarrierSenseTimer) {
     loop {
-        HighLevelTimer::after_millis(1).await;
+        HighLevelTimer::after_micros(100).await;
         let _ = timer.line_idle();
     }
 }
@@ -658,7 +654,7 @@ async fn main(spawner: Spawner) {
         receive_from_ibus_channel
     )));
 
-    //unwrap!(spawner.spawn(timer_idle_task(timer)));
+    unwrap!(spawner.spawn(timer_idle_task(timer)));
     unwrap!(spawner.spawn(uart_rx_task(uart_receiver_component, send_to_raw_socket)));
 
     unwrap!(spawner.spawn(ibus_ipv4_to_ethernet_task(
