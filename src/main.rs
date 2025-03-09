@@ -14,6 +14,7 @@ use embassy_net::driver::{
 };
 use embassy_net::{EthernetAddress, Ipv4Cidr, StackResources};
 use embassy_net_driver_channel::State as NetState;
+use embassy_stm32::crc::{self, Crc};
 use embassy_stm32::gpio::{self, Flex, Pin};
 use embassy_stm32::time::Hertz;
 use embassy_stm32::timer::input_capture::{CapturePin, Ch1};
@@ -34,7 +35,7 @@ use embassy_time::Timer as HighLevelTimer;
 use embassy_usb::class::cdc_ncm::embassy_net::Device;
 use embassy_usb::class::cdc_ncm::{CdcNcmClass, State};
 use embassy_usb::{Builder, Config as UsbConfig};
-use ibus_redirect::{uart_rx_task, uart_tx_task};
+use ibus_redirect::{ibus_half_duplex_task, uart_rx_task, uart_tx_task};
 use smoltcp::phy::ChecksumCapabilities;
 use smoltcp::wire::{EthernetFrame, Ipv4Packet, UdpPacket};
 use smoltcp::wire::{EthernetProtocol, Ipv4Repr};
@@ -65,6 +66,7 @@ pub type ChannelReceiver = channel::Receiver<'static, NoopRawMutex, Vec<u8>, MAX
 use embedded_alloc::LlffHeap as Heap;
 mod coap;
 mod ibus_redirect;
+mod ipv4_packet_reconstructor;
 mod usb_setup;
 
 #[global_allocator]
@@ -193,6 +195,7 @@ struct WrapperIbusRouter {
     pub simulated_mac_address: EthernetAddress,
     pub pc_address: Ipv4Addr,
     pub sender_to_redirect_task: ChannelSender,
+    pub crc: Crc<'static>,
 }
 
 impl WrapperIbusRouter {
@@ -231,14 +234,18 @@ impl WrapperIbusRouter {
         }
     }
 
-    pub fn intercept_ipv4_packet(&self, packet: EthernetFrame<&[u8]>) {
+    pub fn intercept_ipv4_packet(&mut self, packet: EthernetFrame<&[u8]>) {
         match Ipv4Packet::new_checked(packet.payload()) {
             Ok(valid_packet) => {
                 if self
                     .ipv4_router
                     .is_ipv4_packet_valid_for_routing(valid_packet.clone())
                 {
-                    let vec_packet = valid_packet.into_inner().to_vec();
+                    let mut vec_packet = valid_packet.into_inner().to_vec();
+                    let crc_val = self.crc.feed_bytes(&vec_packet) as u16;
+                    self.crc.reset();
+                    vec_packet.extend_from_slice(crc_val.to_le_bytes().as_ref());
+
                     debug!("routing packet to send to redirect task from ethernet ipv4");
                     match self.sender_to_redirect_task.try_send(vec_packet) {
                         Err(_) => {
@@ -263,6 +270,7 @@ impl<D: NetDriver> WrapperDriver<D> {
         sender_to_redirect_task: ChannelSender,
         test_pc_address: Ipv4Addr,
         router: &Ipv4Router,
+        crc: Crc<'static>,
     ) -> Self {
         Self {
             inner,
@@ -273,6 +281,7 @@ impl<D: NetDriver> WrapperDriver<D> {
                 ipv4_router: router.clone(),
                 sender_to_redirect_task,
                 pc_address: test_pc_address,
+                crc,
             },
         }
     }
@@ -504,7 +513,9 @@ async fn main(spawner: Spawner) {
 
     let peripherals_instance = embassy_stm32::init(config);
     let mut config = UartConfig::default();
-    config.baudrate = 1_000_000;
+    config.invert_tx = true;
+    config.invert_rx = true;
+    config.baudrate = 500_000;
 
     let timer4 = peripherals_instance.TIM4;
     let timer = CarrierSenseTimer::new(timer4, peripherals_instance.PD12);
@@ -612,6 +623,16 @@ async fn main(spawner: Spawner) {
 
     const TEST_PC_ADDRESS: Ipv4Addr = Ipv4Addr::new(10, 1, 0, 100);
 
+    let crc = Crc::new(
+        peripherals_instance.CRC,
+        unwrap!(crc::Config::new(
+            crc::InputReverseConfig::Byte,
+            true,
+            crc::PolySize::Width16,
+            0x0000_0000,
+            0x1021,
+        )),
+    );
     let device_wrapper = WrapperDriver::new(
         device,
         EthernetAddress::from_bytes(&our_mac_addr),
@@ -619,6 +640,7 @@ async fn main(spawner: Spawner) {
         send_to_uart_task,
         TEST_PC_ADDRESS,
         &ipv4_route_rules,
+        crc,
     );
 
     // let config = embassy_net::Config::dhcpv4(Default::default());
@@ -649,13 +671,21 @@ async fn main(spawner: Spawner) {
     manager.add_resource(resource);
     unwrap!(spawner.spawn(coap_task(stack, manager)));
 
-    unwrap!(spawner.spawn(uart_tx_task(
+    unwrap!(spawner.spawn(ibus_half_duplex_task(
         uart_sender_component,
-        receive_from_ibus_channel
+        receive_from_ibus_channel,
+        uart_receiver_component,
+        ipv4_packet_reconstructor::Ipv4PacketParser::new(send_to_raw_socket),
+        timer
     )));
 
-    unwrap!(spawner.spawn(timer_idle_task(timer)));
-    unwrap!(spawner.spawn(uart_rx_task(uart_receiver_component, send_to_raw_socket)));
+    //    unwrap!(spawner.spawn(uart_tx_task(
+    //        uart_sender_component,
+    //        receive_from_ibus_channel
+    //    )));
+    //
+    //    unwrap!(spawner.spawn(timer_idle_task(timer)));
+    // unwrap!(spawner.spawn(uart_rx_task(uart_receiver_component, send_to_raw_socket)));
 
     unwrap!(spawner.spawn(ibus_ipv4_to_ethernet_task(
         receive_from_uart_task_channel,
