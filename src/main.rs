@@ -32,11 +32,13 @@ use embassy_stm32::{
     rng, usart, usb, Config,
 };
 use embassy_sync::blocking_mutex::raw::NoopRawMutex;
-use embassy_time::Timer as HighLevelTimer;
+use embassy_time::{Duration, Timer as HighLevelTimer};
 use embassy_usb::class::cdc_ncm::embassy_net::Device;
 use embassy_usb::class::cdc_ncm::{CdcNcmClass, State};
 use embassy_usb::{Builder, Config as UsbConfig};
-use ibus_redirect::{ibus_half_duplex_task, uart_rx_task, uart_tx_task};
+use ibus_redirect::{
+    ibus_half_duplex_task, uart_rx_task, uart_tx_task, CarrierSenseBackoffCaluator,
+};
 use smoltcp::phy::ChecksumCapabilities;
 use smoltcp::wire::{EthernetFrame, Ipv4Packet, UdpPacket};
 use smoltcp::wire::{EthernetProtocol, Ipv4Repr};
@@ -674,13 +676,16 @@ async fn main(spawner: Spawner) {
     let mut manager = CoapStateManager::new();
     manager.add_resource(resource);
     unwrap!(spawner.spawn(coap_task(stack, manager)));
+    let backoff_calculator =
+        CarrierSenseBackoffCaluator::new(5, Duration::from_micros(13000), 512, rng);
 
     unwrap!(spawner.spawn(ibus_half_duplex_task(
         uart_sender_component,
         receive_from_ibus_channel,
         uart_receiver_component,
         ipv4_packet_reconstructor::Ipv4PacketParser::new(send_to_raw_socket),
-        timer
+        timer,
+        backoff_calculator
     )));
 
     //    unwrap!(spawner.spawn(uart_tx_task(

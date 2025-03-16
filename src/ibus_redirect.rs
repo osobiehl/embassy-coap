@@ -5,8 +5,11 @@ use embassy_futures::select;
 // global logger
 use embassy_net::driver::Driver as NetDriver;
 use embassy_stm32::mode::Async;
+use embassy_stm32::peripherals::RNG;
+use embassy_stm32::rng::Rng;
 use embassy_stm32::usart::{RingBufferedUartRx, UartRx, UartTx};
 use embassy_time::{with_timeout, Duration, Timer};
+use embedded_io_async::{Read, ReadReady};
 use serial_line_ip::{Decoder, Encoder};
 
 use crate::ipv4_packet_reconstructor::Ipv4PacketParser;
@@ -111,38 +114,98 @@ pub async fn uart_tx_task(
 
 pub enum InternalBusWriteError {
     Collision,
-    Timeout,
-    UartError(()),
+    UartError,
+    IbusDisconnected,
 }
 pub async fn write_to_internal_bus(
     send_slice: &[u8],
     tx_uart: &mut UartTx<'static, Async>,
     rx_uart: &mut RingBufferedUartRx<'_>,
     input_feeder: &mut Ipv4PacketParser,
-) {
+) -> Result<(), InternalBusWriteError> {
     let mut rx_dummy_buffer = [0u8; 1500];
+    if let Ok(true) = rx_uart.read_ready() {
+        warn!("ibus is busy, not writing");
+        return Err(InternalBusWriteError::Collision);
+    }
     let _ = match tx_uart.write(send_slice).await {
         Ok(()) => {}
         Err(e) => warn!("tx failed: collision likely {:?}", e),
     };
-    let s = match with_timeout(
+    match with_timeout(
         Duration::from_millis(100),
-        rx_uart.read(&mut rx_dummy_buffer),
+        rx_uart.read_exact(&mut rx_dummy_buffer[..send_slice.len()]),
     )
     .await
     {
         Ok(Ok(b)) => b,
         Ok(Err(e)) => {
             warn!("read failed: collision likely {:?}", e);
-            return;
+            return Err(InternalBusWriteError::UartError);
         }
         Err(_) => {
             warn!("timeout: are pins properly connected?");
-            return;
+            return Err(InternalBusWriteError::IbusDisconnected);
         }
     };
-    input_feeder.push_slice(&rx_dummy_buffer[..s]);
-    debug!("wrote {} bytes to internal bus!", s);
+
+    let receive_slice = &rx_dummy_buffer[..send_slice.len()];
+    if send_slice != receive_slice {
+        warn!(
+            "collision detected, sent {} bytes but receied {}",
+            send_slice.len(),
+            receive_slice.len()
+        );
+        info!("tx {:?}", send_slice);
+        info!("rx {:?}", receive_slice);
+        return Err(InternalBusWriteError::Collision);
+    };
+    //input_feeder.push_slice(&rx_dummy_buffer[..s]);
+    debug!("wrote {} bytes to internal bus!", send_slice.len());
+    Ok(())
+}
+pub struct CarrierSenseBackoffCaluator<R: rand_core::RngCore> {
+    current_retries: u8,
+    max_retries: u8,
+    base_backoff: Duration,
+    random_component_microseconds: u32,
+    random: R,
+}
+
+impl<R: rand_core::RngCore> CarrierSenseBackoffCaluator<R> {
+    pub fn new(
+        max_retries: u8,
+        base_backoff: Duration,
+        random_component_microseconds: u32,
+        random: R,
+    ) -> Self {
+        Self {
+            current_retries: 0,
+            max_retries,
+            base_backoff,
+            random_component_microseconds,
+            random,
+        }
+    }
+    fn get_random_backoff(&mut self) -> Duration {
+        let duration = self.random.next_u32() % self.random_component_microseconds;
+        Duration::from_micros(duration as u64)
+    }
+
+    pub fn backoff(&mut self) -> Duration {
+        let mut backoff = self.base_backoff * (2u32.pow(self.current_retries as u32));
+        if self.current_retries < self.max_retries {
+            self.current_retries += 1
+        }
+
+        backoff = backoff + self.get_random_backoff();
+        info!("backing off for {:?}", backoff);
+        backoff
+    }
+
+    pub fn reset(&mut self) {
+        self.current_retries = 0;
+    }
 }
 
 #[embassy_executor::task]
@@ -152,6 +215,7 @@ pub async fn ibus_half_duplex_task(
     rx_uart: UartRx<'static, Async>,
     mut packet_feeder: Ipv4PacketParser,
     idle_detector: CarrierSenseTimer,
+    mut backoff_calculator: CarrierSenseBackoffCaluator<Rng<RNG, 'static>>,
 ) {
     // this is a lot of memcpy -- oh well
     let mut rx_ring_buffer = [0u8; 8000];
@@ -174,39 +238,44 @@ pub async fn ibus_half_duplex_task(
                     }
                 }
                 select::Either::Second(bytes_to_send) => {
-                    if idle_detector.line_idle() {
-                        write_to_internal_bus(
+                    if !idle_detector.line_idle()
+                        || write_to_internal_bus(
                             &bytes_to_send,
                             &mut tx_uart,
                             &mut uart_ringbuffered,
                             &mut packet_feeder,
                         )
-                        .await;
-                    } else {
+                        .await
+                        .is_err()
+                    {
                         vec_to_send = bytes_to_send;
-                        info!("avoided a collision");
+                        info!("line busy, retrying");
                     }
                 }
             }
         } else {
+            // wait for the bus to be idle
             let Ok(bytes_read) = uart_ringbuffered.read(&mut read_buffer).await else {
                 warn!("reception failed");
                 continue;
             };
-            Timer::after(Duration::from_micros(500)).await;
+            Timer::after(backoff_calculator.backoff()).await;
             packet_feeder.push_slice(&read_buffer[..bytes_read]);
-            if !idle_detector.line_idle() {
-                warn!("line still idle after retry :(");
-                continue;
-            } else {
-                write_to_internal_bus(
+            if !idle_detector.line_idle()
+                || write_to_internal_bus(
                     &vec_to_send,
                     &mut tx_uart,
                     &mut uart_ringbuffered,
                     &mut packet_feeder,
                 )
-                .await;
+                .await
+                .is_err()
+            {
+                warn!("line still idle after retry :(");
+                continue;
+            } else {
                 vec_to_send.clear();
+                backoff_calculator.reset();
             }
         }
     }
