@@ -23,6 +23,7 @@ use embassy_stm32::timer::Channel;
 use embassy_stm32::usart::Config as UartConfig;
 use embassy_stm32::usart::Uart;
 use embassy_stm32::usb::Driver;
+use embassy_stm32::Peripheral;
 use embassy_stm32::{
     bind_interrupts,
     gpio::{AfType, AnyPin, Input},
@@ -80,16 +81,19 @@ static mut HEAP_MEM: [MaybeUninit<u8>; HEAP_SIZE] = [MaybeUninit::uninit(); HEAP
 
 pub struct CarrierSenseTimer {
     timer: Timer<'static, peripherals::TIM4>,
-    pin: CapturePin<'static, peripherals::TIM4, Ch1>,
+    _pin: CapturePin<'static, peripherals::TIM4, Ch1>,
 }
 
 impl CarrierSenseTimer {
     const UART_WORDS_PER_TICK: u16 = 2;
-    const UART_NUMBER_OF_BITS_TO_WAIT: u16 = 4; // wait for 4 possible messages
+    const UART_NUMBER_OF_BITS_TO_WAIT: u16 = 40; // wait for 4 possible messages
     const WAIT_MICROSECONDS: u16 = (Self::UART_WORDS_PER_TICK * Self::UART_NUMBER_OF_BITS_TO_WAIT);
-    pub fn new(timer4: peripherals::TIM4, pin: PD12) -> Self {
-        let capture_pin = CapturePin::new_ch1(pin, gpio::Pull::None);
+    pub fn new(timer4: peripherals::TIM4, mut pin: PD12) -> Self {
+        let mut flex = Flex::new(&mut pin);
+        flex.set_as_input_output(gpio::Speed::VeryHigh);
+        drop(flex);
 
+        let capture_pin = CapturePin::new_ch1(pin, gpio::Pull::None);
         let mut timer4 = Timer::new(timer4);
         timer4.set_input_capture_mode(Channel::Ch1, InputCaptureMode::Rising);
         timer4.enable_channel(Channel::Ch1, true);
@@ -104,7 +108,7 @@ impl CarrierSenseTimer {
         timer4.set_autoreload_preload(false);
         Self {
             timer: timer4,
-            pin: capture_pin,
+            _pin: capture_pin,
         }
     }
     pub fn line_idle(&self) -> bool {

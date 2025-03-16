@@ -109,6 +109,11 @@ pub async fn uart_tx_task(
     }
 }
 
+pub enum InternalBusWriteError {
+    Collision,
+    Timeout,
+    UartError(()),
+}
 pub async fn write_to_internal_bus(
     send_slice: &[u8],
     tx_uart: &mut UartTx<'static, Async>,
@@ -190,7 +195,7 @@ pub async fn ibus_half_duplex_task(
             };
             Timer::after(Duration::from_micros(500)).await;
             packet_feeder.push_slice(&read_buffer[..bytes_read]);
-            if idle_detector.line_idle() {
+            if !idle_detector.line_idle() {
                 warn!("line still idle after retry :(");
                 continue;
             } else {
