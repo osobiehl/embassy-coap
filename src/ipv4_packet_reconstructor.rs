@@ -7,15 +7,18 @@ use crate::ChannelSender;
 pub struct Ipv4PacketParser {
     buffer: Vec<u8>,
     expected_len: Option<usize>,
+    expected_header_len: u8,
     sender: ChannelSender,
 }
 
 impl Ipv4PacketParser {
     const CRC_SIZE: usize = 2;
+    const MAX_PACKET_SIZE: usize = 2000;
     pub fn new(sender: ChannelSender) -> Self {
         Self {
             buffer: Vec::new(),
             expected_len: None,
+            expected_header_len: 0,
             sender,
         }
     }
@@ -25,27 +28,24 @@ impl Ipv4PacketParser {
     pub fn push_byte(&mut self, byte: u8) -> bool {
         self.buffer.push(byte);
 
-        if self.buffer.len() == 20 {
-            // Perform header checksum verification once the full header is received
+        if self.buffer.len() >= 20 {
+            if self.expected_header_len == 0{
+                let packet = Ipv4Packet::new_unchecked(&self.buffer);
+                debug!("header length: {}", packet.header_len());
+                self.expected_header_len = packet.header_len();
+            };
+        }
+
+        if self.buffer.len()  == self.expected_header_len as usize{
             let packet = Ipv4Packet::new_unchecked(&self.buffer);
-            if packet.header_len() as usize > self.buffer.len() {
-                warn!(
-                    "incorrect packet received: expected a header length of {} but got {}",
-                    packet.header_len(),
-                    self.buffer.len()
-                );
-                self.buffer.clear();
-                self.expected_len = None;
-                return false;
-            }
-            debug!("header length: {}", packet.header_len());
-            if !packet.verify_checksum() {
+            let total_length = packet.total_len() as usize;
+            if !packet.verify_checksum() || total_length > Self::MAX_PACKET_SIZE{
                 warn!("Invalid IPv4 header checksum, discarding packet");
                 self.buffer.clear();
                 self.expected_len = None;
+                self.expected_header_len = 0;
                 return false;
             }
-            let total_length = packet.total_len() as usize;
             info!("expected total length of: {}", total_length);
             self.expected_len = Some(total_length + Self::CRC_SIZE);
         }
@@ -80,5 +80,6 @@ impl Ipv4PacketParser {
         }
         self.buffer.clear();
         self.expected_len = None;
+        self.expected_header_len = 0;
     }
 }

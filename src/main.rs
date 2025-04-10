@@ -465,7 +465,7 @@ pub fn log_packet(receive_ipv4_packet: &[u8], msg: &str) {
                     udp.dst_port()
                 )
             } else {
-                warn!("packet is not udp packet");
+                warn!("packet is not udp packet: {:?}", repr);
             }
         }
 
@@ -677,7 +677,7 @@ async fn main(spawner: Spawner) {
     manager.add_resource(resource);
     unwrap!(spawner.spawn(coap_task(stack, manager)));
     let backoff_calculator =
-        CarrierSenseBackoffCaluator::new(5, Duration::from_micros(13000), 512, rng);
+        CarrierSenseBackoffCaluator::new(5, Duration::from_micros(1300), 512, rng);
 
     unwrap!(spawner.spawn(ibus_half_duplex_task(
         uart_sender_component,

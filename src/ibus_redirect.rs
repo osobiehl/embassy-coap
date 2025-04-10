@@ -162,6 +162,7 @@ pub async fn write_to_internal_bus(
     };
     //input_feeder.push_slice(&rx_dummy_buffer[..s]);
     debug!("wrote {} bytes to internal bus!", send_slice.len());
+    //Timer::after(Duration::from_millis(1)).await;
     Ok(())
 }
 pub struct CarrierSenseBackoffCaluator<R: rand_core::RngCore> {
@@ -193,7 +194,7 @@ impl<R: rand_core::RngCore> CarrierSenseBackoffCaluator<R> {
     }
 
     pub fn backoff(&mut self) -> Duration {
-        let mut backoff = self.base_backoff * (2u32.pow(self.current_retries as u32));
+        let mut backoff = self.base_backoff * (self.current_retries as u32 + 1);
         if self.current_retries < self.max_retries {
             self.current_retries += 1
         }
@@ -234,7 +235,8 @@ pub async fn ibus_half_duplex_task(
                 select::Either::First(ringbuffer_read_result) => {
                     if let Ok(bytes_read) = ringbuffer_read_result {
                         debug!("read {} bytes", bytes_read);
-                        packet_feeder.push_slice(&read_buffer[..bytes_read])
+                        packet_feeder.push_slice(&read_buffer[..bytes_read]);
+                        //Timer::after(Duration::from_millis(1)).await;
                     }
                 }
                 select::Either::Second(bytes_to_send) => {
